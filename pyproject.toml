@@ -8,6 +8,7 @@ dependencies = [
   "truststore",
   "requests-gssapi; sys_platform != 'win32'",
   "requests-negotiate-sspi; sys_platform == 'win32'",
+  "playwright",
 ]
 
 [project.scripts]

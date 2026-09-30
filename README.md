@@ -58,8 +58,33 @@ Datumsangaben: `heute`/`h`, `gestern`/`g`, `morgen`, `mo`…`so` (aktuelle Woche
 
 BEMOT: `01` abrechenbar (Default), `02` nicht abrechenbar, `05` Reisezeit.
 
+### Zweites System mit M365-Anmeldung (SAP BTP)
+
+Für Systeme ohne Kerberos, deren Anmeldung über Microsoft 365 läuft, gibt es eine Browser-Anmeldung
+mit eigenem Profil. Deine Browser-Cookies werden dabei nicht ausgelesen:
+
+```bash
+zeit login btp --url "https://…launchpad.cfapps.eu20.hana.ondemand.com/site?siteId=…"
+```
+
+Es öffnet sich ein Browserfenster. Melde dich an, wähle „Angemeldet bleiben“ und öffne die App
+„Meine Zeiterfassung“. `zeit` erkennt dabei die Service-URL und schließt das Fenster.
+
+Standardmäßig bleibt es bei Kerberos. Das zweite System wählst du pro Aufruf mit `-s`:
+
+```bash
+zeit -s btp show           # oder: ZEIT_SYSTEM=btp zeit show
+zeit -s btp add heute 9-10 csop CSIRT-71
+```
+
+Soll `btp` der Standard sein, setzt `zeit login btp --standard` das in der Config (`"system": "btp"`).
+`zeit -s kerberos …` nutzt dann trotzdem Kerberos. Ist die Microsoft-Anmeldung abgelaufen, meldet
+dich `zeit login btp` neu an.
+
 Die Konfiguration liegt in `~/.config/sap-zeit/config.json`. Dort stehen die Aliase und optional
-`pernr`, `service_url`, `portal_url`, `sap_client`, `default_awart` und `default_bemot`.
+`pernr`, `service_url`, `portal_url`, `sap_client`, `default_awart` und `default_bemot`. Unter `systems`
+stehen weitere Systeme, die jeden dieser Werte überschreiben können, dazu `auth` (`kerberos` oder
+`browser`), `login_url` und `browser` (`msedge`, `chrome` oder `chromium`).
 
 ## Technische Hinweise
 

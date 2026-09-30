@@ -1,13 +1,16 @@
 ---
 name: zeit
 description: SAP-Zeiterfassung (CATS, Fiori „Meine Zeiterfassung“) über die CLI `zeit`. Verwenden, wenn der User Arbeitszeiten anzeigen, buchen, ändern, löschen oder freigeben will, nach Soll/Ist-Stunden, PSP-Elementen oder dem Arbeitsvorrat fragt oder erwähnt, was er heute/gestern gemacht hat und gebucht haben möchte.
-allowed-tools: Bash(zeit show:*), Bash(zeit w:*), Bash(zeit projekte:*), Bash(zeit p:*), Bash(zeit alias:*)
+allowed-tools: Bash(zeit show:*), Bash(zeit w:*), Bash(zeit projekte:*), Bash(zeit p:*), Bash(zeit alias:*), Bash(zeit -s btp show:*), Bash(zeit -s btp w:*), Bash(zeit -s btp projekte:*), Bash(zeit -s btp p:*)
 ---
 
 # SAP-Zeiterfassung mit `zeit`
 
-`zeit` liegt durch dieses Plugin im PATH. Die Anmeldung läuft automatisch per Kerberos.
-Es gibt keine Passwörter, und du fragst auch nie danach.
+`zeit` liegt durch dieses Plugin im PATH. Die Anmeldung läuft automatisch per Kerberos oder,
+bei Systemen mit M365-Login, über ein eigenes Browser-Profil. Es gibt keine Passwörter, und du
+fragst auch nie danach. Standard ist Kerberos. Ein zweites System mit M365-Login (z. B. `btp`)
+wählt `zeit -s btp …`. Nutze es nur, wenn der User das System nennt oder es in der Session schon
+verwendet wurde.
 
 ## Lesen (ohne Rückfrage erlaubt)
 
@@ -69,6 +72,8 @@ lass sie bestätigen und führe dann ein `zeit add` pro Eintrag aus.
 
 | Meldung | Vorgehen |
 |---|---|
+| `Browser-Anmeldung abgelaufen` / `Nicht angemeldet (Weiterleitung …)` | Der User soll `! zeit login` ausführen (öffnet ein Fenster für die M365-Anmeldung). Den Befehl nicht selbst ausführen |
+| `System … ist nicht konfiguriert` | Einrichten mit `! zeit login NAME --url LAUNCHPAD-URL`. Die URL erfragst du beim User |
 | `Kerberos-Anmeldung fehlgeschlagen` | macOS/Linux: der User soll `! kinit` ausführen. Windows: mit dem Domänenkonto angemeldet? Immer auch prüfen, ob VPN/Firmennetz aktiv ist |
 | `… Projekte passen zu …` | Kandidaten zeigen und den User wählen lassen |
 | `von SAP abgelehnt: …` | SAP-Meldung wörtlich weitergeben, nicht blind mit anderen Werten wiederholen |

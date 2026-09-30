@@ -1,7 +1,7 @@
 # Funktionsweise von `zeit`
 
 `zeit` ist ein einzelnes Python-Modul (`zeit.py`) und nutzt die Bibliotheken `requests`,
-`requests-gssapi` und `truststore`. Was die SAP-Schnittstelle kann, steht in [API.md](API.md).
+`requests-gssapi` und `truststore`, für die Browser-Anmeldung außerdem `playwright`. Was die SAP-Schnittstelle kann, steht in [API.md](API.md).
 
 ## Überblick
 
@@ -31,8 +31,10 @@ Ablauf eines Aufrufs:
 ### Konfiguration
 
 `DEFAULTS` enthält Portal- und Service-URL, den Mandanten und die Default-Werte für AWART (`0800`)
-und BEMOT (`01`). `config.json` überschreibt diese Werte. `save_config` schreibt nur Werte, die vom
-Default abweichen, sowie die Aliase.
+und BEMOT (`01`). `config.json` überschreibt diese Werte. Ist ein System gewählt (`-s NAME`, sonst
+`$ZEIT_SYSTEM`, sonst `"system"` in der Config), überschreiben dessen Einträge unter `systems` die
+Werte noch einmal. Ohne System oder mit `-s kerberos` gilt die oberste Ebene, also Kerberos. Die Aliase gelten für alle Systeme. `save_config` schreibt die Config-Datei
+zurück und ändert dabei nur die Aliase bzw. das System, das `zeit login` einrichtet.
 
 ```json
 {
@@ -40,7 +42,15 @@ Default abweichen, sowie die Aliase.
     "csop": {"posid": "NX.000037.20.0001"},
     "ausb": {"posid": "NM.000031.20.0005", "bemot": "02"}
   },
-  "pernr": "000xxxxx"
+  "pernr": "000xxxxx",
+  "systems": {
+    "btp": {
+      "auth": "browser",
+      "login_url": "https://…launchpad.cfapps.eu20.hana.ondemand.com/site?siteId=…",
+      "service_url": "https://…/sap/opu/odata/sap/HCM_TIMESHEET_MAN_SRV",
+      "sap_client": ""
+    }
+  }
 }
 ```
 
@@ -72,6 +82,27 @@ Session einen Browser-User-Agent mit, weil das Portal andere Clients ablehnt.
 
 Sessions und Cookies werden **nicht** gespeichert. Jeder Aufruf meldet sich neu per Kerberos an
 (etwa eine Sekunde). Der Vorteil: Es liegt kein Login-Nachweis auf der Platte.
+
+### Browser-Anmeldung (`auth: "browser"`)
+
+Für Systeme mit M365-Login, zum Beispiel das Launchpad auf der SAP BTP, gibt es kein Kerberos.
+Stattdessen hat jedes System ein eigenes Browser-Profil unter `~/.local/share/sap-zeit/browser/<NAME>`.
+Dieses Profil ist vom normalen Browser des Users getrennt. `zeit` liest keine Cookies aus dem
+normalen Browser.
+
+- `zeit login NAME --url LAUNCHPAD-URL` öffnet Edge, Chrome oder Chromium (in dieser Reihenfolge,
+  festlegbar mit `"browser"`) sichtbar mit diesem Profil. Der User meldet sich an und öffnet
+  „Meine Zeiterfassung“. `zeit` erkennt die OData-Service-URL und den `sap-client` an den Requests
+  der App und speichert sie. Danach schließt sich das Fenster.
+- Bei jedem weiteren Aufruf öffnet `_browser_session()` die Service-URL headless im Profil. Der
+  App-Router leitet zu XSUAA und Microsoft weiter. Weil das Profil die Microsoft-Anmeldung hält
+  („Angemeldet bleiben“), läuft das ohne Rückfrage durch. Die Cookies des App-Routers gehen dann in
+  die `requests`-Session, danach wird der Browser geschlossen. Das dauert einige Sekunden.
+- Landet der Browser nicht wieder auf dem Service-Host (MFA oder Anmeldung abgelaufen), oder leitet
+  der App-Router später auf die Anmeldung um, meldet `zeit`: `zeit login NAME` ausführen.
+
+Das Browser-Profil ist ein Login-Nachweis für das M365-Konto und muss wie ein Passwort geschützt
+werden. Solange `zeit login` läuft, ist das Profil gesperrt. Parallele Aufrufe schlagen dann fehl.
 
 `submit()` wertet die Multipart-Antwort Changeset für Changeset aus (`_batch_parts`). Wenn ein
 Changeset fehlschlägt, meldet die CLI, wie viele Operationen erfolgreich waren, und die SAP-Meldungen
