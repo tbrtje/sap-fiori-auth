@@ -23,7 +23,7 @@ import re
 import ssl
 import sys
 import uuid
-from collections import OrderedDict, defaultdict
+from collections import defaultdict
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -139,10 +139,16 @@ class Timesheet:
     # -- Lesen
 
     def entries(self, start: dt.date, end: dt.date) -> list[dict]:
-        records: OrderedDict[str, dict] = OrderedDict()
+        # RecordNumber beginnt je Tag wieder bei 1, ist über mehrere Tage also nicht eindeutig. Die Zeilen einer
+        # Buchung kommen zusammenhängend: neue Buchung, sobald RecordNumber wechselt oder ein Feld erneut auftaucht.
+        records: list[dict] = []
+        prev = None
         for row in self.get("TimeDataList", self._flt(start, end)):
-            records.setdefault(row["RecordNumber"], {})[row["FieldName"]] = row["FieldValue"]
-        out = [r for r in records.values() if r.get("COUNTER")]
+            if row["RecordNumber"] != prev or row["FieldName"] in records[-1]:
+                records.append({})
+                prev = row["RecordNumber"]
+            records[-1][row["FieldName"]] = row["FieldValue"]
+        out = [r for r in records if r.get("COUNTER")]
         out.sort(key=lambda r: (r["WORKDATE"], r.get("STARTTIME", "")))
         return out
 

@@ -124,6 +124,12 @@ dieselbe `RecordNumber` und werden zusammengeführt:
 {"RecordNumber": "1", "FieldName": "TIME",     "FieldValue": "0.500", ...}
 ```
 
+**Achtung:** `RecordNumber` beginnt an jedem Tag wieder bei `1` (mit Leerzeichen aufgefüllt, z. B. `"1 "`).
+Über mehrere Tage ist sie also nicht eindeutig. Die Zeilen einer Buchung kommen aber zusammenhängend und
+beginnen immer mit `WORKDATE`. Eine neue Buchung beginnt deshalb dort, wo `RecordNumber` wechselt oder ein Feld
+zum zweiten Mal auftaucht. Wer nur nach `RecordNumber` gruppiert, bekommt bei Zeiträumen über mehrere Tage
+Buchungen, die sich gegenseitig überschreiben.
+
 Zusammengeführt sieht eine Buchung so aus:
 
 | Feld | Beispiel | Bedeutung |
