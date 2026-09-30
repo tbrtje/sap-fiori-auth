@@ -3,7 +3,12 @@ name = "sap-zeit"
 version = "0.1.0"
 description = "CLI für die SAP-Zeiterfassung (CATS) mit Kerberos-SSO"
 requires-python = ">=3.10"
-dependencies = ["requests", "requests-gssapi", "truststore"]
+dependencies = [
+  "requests",
+  "truststore",
+  "requests-gssapi; sys_platform != 'win32'",
+  "requests-negotiate-sspi; sys_platform == 'win32'",
+]
 
 [project.scripts]
 zeit = "zeit:main"

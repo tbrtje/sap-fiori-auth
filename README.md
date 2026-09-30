@@ -12,6 +12,10 @@ Aufruf mit Prüfsummen-Check nach `~/.local/share/sap-zeit/bin`. uv holt dann Py
 Der erste Start braucht deshalb etwa 10 Sekunden und Internetzugriff (GitHub, PyPI, zusammen ca. 120 MB),
 danach dauert ein Aufruf rund 2 Sekunden. Shell-Profile und System bleiben unverändert.
 
+**Plattformen:** macOS (getestet), Windows und Linux (umgesetzt, aber ungetestet). Unter Windows läuft
+`bin/zeit` in Git Bash. Die nutzt Claude Code dort ohnehin. Die Anmeldung erfolgt per SSPI mit der
+Windows-Domänenanmeldung, `klist` ist dafür nicht nötig.
+
 ### Als Claude-Code-Plugin
 
 ```

@@ -1,6 +1,11 @@
 # /// script
 # requires-python = ">=3.10"
-# dependencies = ["requests", "requests-gssapi", "truststore"]
+# dependencies = [
+#   "requests",
+#   "truststore",
+#   "requests-gssapi; sys_platform != 'win32'",
+#   "requests-negotiate-sspi; sys_platform == 'win32'",
+# ]
 # ///
 """zeit – CLI für die SAP-Zeiterfassung (CATS / HCM_TIMESHEET_MAN_SRV) mit Kerberos-SSO.
 
@@ -20,11 +25,11 @@ import sys
 import uuid
 from collections import OrderedDict, defaultdict
 from pathlib import Path
+from urllib.parse import urlparse
 
 import requests
 import truststore
 from requests.adapters import HTTPAdapter
-from requests_gssapi import OPTIONAL, HTTPSPNEGOAuth
 
 DEFAULTS = {
     "portal_url": "https://portal.btc-ag.com/irj/portal",
@@ -78,6 +83,16 @@ class _TLSAdapter(HTTPAdapter):
         super().init_poolmanager(*args, **kwargs)
 
 
+def _negotiate_auth(host: str) -> requests.auth.AuthBase:
+    """Kerberos/SPNEGO mit dem Ticket der Betriebssystem-Anmeldung (Windows: SSPI, sonst GSSAPI)."""
+    if sys.platform == "win32":
+        from requests_negotiate_sspi import HttpNegotiateAuth
+        # host explizit, sonst würde der Name per DNS kanonisiert und ggf. ein falscher SPN angefragt
+        return HttpNegotiateAuth(host=host)
+    from requests_gssapi import OPTIONAL, HTTPSPNEGOAuth
+    return HTTPSPNEGOAuth(mutual_authentication=OPTIONAL)
+
+
 class Timesheet:
     def __init__(self, cfg: dict):
         self.cfg = cfg
@@ -91,7 +106,7 @@ class Timesheet:
 
     def _login(self) -> None:
         try:
-            r = self.s.get(self.cfg["portal_url"], auth=HTTPSPNEGOAuth(mutual_authentication=OPTIONAL), timeout=30)
+            r = self.s.get(self.cfg["portal_url"], auth=_negotiate_auth(urlparse(self.cfg["portal_url"]).hostname), timeout=30)
         except requests.RequestException as e:
             raise ZeitError(f"Portal nicht erreichbar: {e}") from e
         if r.status_code == 401 or "MYSAPSSO2" not in self.s.cookies:
@@ -510,6 +525,9 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    # Windows schreibt umgeleitete Ausgaben sonst in cp1252 und scheitert an ✓, „“ usw.
+    for stream in (sys.stdout, sys.stderr):
+        stream.reconfigure(encoding="utf-8")
     args = build_parser().parse_args(argv)
     cfg = load_config()
     try:

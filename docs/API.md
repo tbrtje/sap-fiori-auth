@@ -40,6 +40,8 @@ sequenceDiagram
 - Nach der Anmeldung setzt das Portal **`MYSAPSSO2`** mit der Domain `.btc-ag.com`. Das Gateway
   vertraut diesem Logon-Ticket. Ein eigener Login am Gateway ist nicht nötig.
 - Weitere Cookies (`JSESSIONID`, `saplb_*`, …) betreffen nur das Portal.
+- Auf Windows-Rechnern in der Domäne liefert SSPI das Ticket aus der Windows-Anmeldung. Der SPN ist
+  derselbe (`HTTP/portal.btc-ag.com`).
 
 ### Eigenheiten des Portals
 

@@ -61,6 +61,11 @@ Default abweichen, sowie die Aliase.
 | `_csrf_token()` | Holt das CSRF-Token einmal pro Lauf und speichert es | `GET /` mit `X-CSRF-Token: Fetch` |
 | `submit(entries)` | Baut den `$batch` (ein Changeset je Buchung), sendet ihn und wertet jede Teilantwort aus | `POST $batch` |
 
+Die Kerberos-Anmeldung übernimmt `_negotiate_auth()`. Unter macOS und Linux nutzt sie `requests-gssapi`
+(GSSAPI, Ticket-Cache des Betriebssystems), unter Windows `requests-negotiate-sspi` (SSPI, Windows-Anmeldung).
+Der Hostname für den SPN wird fest vorgegeben, damit SSPI ihn nicht per DNS kanonisiert.
+Welche Pakete installiert werden, steuern Plattform-Marker im Skript-Header (PEP 723) und in `pyproject.toml`.
+
 Die Session nutzt `_TLSAdapter`. Der Adapter verwendet den macOS-Trust-Store (`truststore`) und
 erlaubt zusätzlich den Cipher `AES128-GCM-SHA256`, den das Portal braucht. Außerdem schickt die
 Session einen Browser-User-Agent mit, weil das Portal andere Clients ablehnt.
@@ -126,6 +131,7 @@ Hinweise:
 
 ## Bekannte Einschränkungen
 
+- Windows und Linux sind umgesetzt, aber nicht auf echten Rechnern getestet.
 - Die Freigabe ist ungetestet (siehe oben).
 - Die Bedeutung der Status-Codes `MACTION`, `YACTION` usw. ist nicht vollständig geklärt. Die
   Anzeige „freigegeben“ für `MACTION` ist eine Annahme.

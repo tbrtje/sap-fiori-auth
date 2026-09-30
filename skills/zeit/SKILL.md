@@ -69,7 +69,7 @@ lass sie bestätigen und führe dann ein `zeit add` pro Eintrag aus.
 
 | Meldung | Vorgehen |
 |---|---|
-| `Kerberos-Anmeldung fehlgeschlagen` | Der User soll `! kinit` ausführen oder prüfen, ob VPN/Firmennetz aktiv ist |
+| `Kerberos-Anmeldung fehlgeschlagen` | macOS/Linux: der User soll `! kinit` ausführen. Windows: mit dem Domänenkonto angemeldet? Immer auch prüfen, ob VPN/Firmennetz aktiv ist |
 | `… Projekte passen zu …` | Kandidaten zeigen und den User wählen lassen |
 | `von SAP abgelehnt: …` | SAP-Meldung wörtlich weitergeben, nicht blind mit anderen Werten wiederholen |
 | `Einmalige Einrichtung: lade uv …` | Normal beim ersten Aufruf (ca. 10 s), einfach abwarten |

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Startet zeit.py aus dem Plugin-Verzeichnis. Fehlt uv, wird es beim ersten Aufruf
-# (geprüft per SHA-256) nach ~/.local/share/sap-zeit/bin geladen; uv holt dann Python und Pakete.
+# Startet zeit.py aus dem Plugin-Verzeichnis (macOS, Linux, Windows/Git Bash). Fehlt uv, wird es beim
+# ersten Aufruf (geprüft per SHA-256) nach ~/.local/share/sap-zeit/bin geladen; uv holt dann Python und Pakete.
 set -euo pipefail
 
 src="${BASH_SOURCE[0]}"
@@ -12,37 +12,66 @@ done
 root="$(cd -P "$(dirname "$src")/.." && pwd)"
 tools="${XDG_DATA_HOME:-$HOME/.local/share}/sap-zeit/bin"
 
+exe=""
+case "$(uname -s)" in
+  MINGW* | MSYS* | CYGWIN*) windows=1; exe=".exe" ;;
+  *) windows=0 ;;
+esac
+
 install_uv() {
-  local target
+  local target ext=tar.gz
   case "$(uname -s)-$(uname -m)" in
     Darwin-arm64) target=aarch64-apple-darwin ;;
     Darwin-x86_64) target=x86_64-apple-darwin ;;
     Linux-x86_64) target=x86_64-unknown-linux-gnu ;;
     Linux-aarch64) target=aarch64-unknown-linux-gnu ;;
-    *) echo "Fehler: Plattform $(uname -s)/$(uname -m) wird nicht unterstützt – bitte uv manuell installieren." >&2; exit 1 ;;
+    *-x86_64 | *-aarch64 | *-arm64)
+      if [ "$windows" = 1 ]; then
+        ext=zip
+        [ "${PROCESSOR_ARCHITECTURE:-}" = ARM64 ] && target=aarch64-pc-windows-msvc || target=x86_64-pc-windows-msvc
+      fi ;;
   esac
-  local base="https://github.com/astral-sh/uv/releases/latest/download" file="uv-$target.tar.gz"
+  if [ -z "${target:-}" ]; then
+    echo "Fehler: Plattform $(uname -s)/$(uname -m) wird nicht unterstützt – bitte uv manuell installieren." >&2
+    exit 1
+  fi
+  local base="https://github.com/astral-sh/uv/releases/latest/download" file="uv-$target.$ext"
   local tmp; tmp="$(mktemp -d)"
   trap 'rm -rf "$tmp"' RETURN
   echo "Einmalige Einrichtung: lade uv ($target) …" >&2
   if ! curl -fsSL -o "$tmp/$file" "$base/$file" || ! curl -fsSL -o "$tmp/$file.sha256" "$base/$file.sha256"; then
-    echo "Fehler: Download von uv fehlgeschlagen (Internet/Proxy?). Alternativ: brew install uv" >&2
+    echo "Fehler: Download von uv fehlgeschlagen (Internet/Proxy?). Alternativ uv manuell installieren." >&2
     exit 1
   fi
-  (cd "$tmp" && shasum -a 256 -c "$file.sha256" >/dev/null) || { echo "Fehler: Prüfsumme von uv stimmt nicht." >&2; exit 1; }
-  tar -xzf "$tmp/$file" -C "$tmp"
+  if command -v sha256sum >/dev/null 2>&1; then sum=(sha256sum -c); else sum=(shasum -a 256 -c); fi
+  (cd "$tmp" && "${sum[@]}" "$file.sha256" >/dev/null) || { echo "Fehler: Prüfsumme von uv stimmt nicht." >&2; exit 1; }
+  mkdir -p "$tmp/x"
+  if [ "$ext" = zip ]; then
+    if command -v unzip >/dev/null 2>&1; then
+      unzip -q "$tmp/$file" -d "$tmp/x"
+    else
+      powershell.exe -NoProfile -Command "Expand-Archive -LiteralPath '$(cygpath -w "$tmp/$file")' -DestinationPath '$(cygpath -w "$tmp/x")'"
+    fi
+  else
+    tar -xzf "$tmp/$file" -C "$tmp/x"
+  fi
+  local bin; bin="$(find "$tmp/x" -type f -name "uv$exe" | head -n 1)"
   mkdir -p "$tools"
-  install -m 755 "$tmp/uv-$target/uv" "$tools/uv"
+  cp "$bin" "$tools/uv$exe"
+  chmod 755 "$tools/uv$exe"
 }
 
 if command -v uv >/dev/null 2>&1; then
   uv=uv
 else
-  [ -x "$tools/uv" ] || install_uv
-  uv="$tools/uv"
+  [ -x "$tools/uv$exe" ] || install_uv
+  uv="$tools/uv$exe"
 fi
 
-# Nur uv-verwaltetes Python nutzen: /usr/bin/python3 ist ohne Xcode-Tools ein Platzhalter,
-# dessen Aufruf einen Installationsdialog öffnen würde.
+script="$root/zeit.py"
+[ "$windows" = 1 ] && script="$(cygpath -w "$script")"
+
+# Nur uv-verwaltetes Python nutzen: /usr/bin/python3 ist auf macOS ohne Xcode-Tools ein Platzhalter
+# (Installationsdialog), unter Windows ggf. der Microsoft-Store-Alias.
 export UV_PYTHON_PREFERENCE=only-managed
-exec "$uv" run --quiet --script "$root/zeit.py" "$@"
+exec "$uv" run --quiet --script "$script" "$@"
