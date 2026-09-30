@@ -1,0 +1,14 @@
+{
+  "name": "gruppe7",
+  "description": "Claude-Code-Plugins der KI-Hackathon-Gruppe 7 (BTC)",
+  "owner": {
+    "name": "KI Hackathon Gruppe 7"
+  },
+  "plugins": [
+    {
+      "name": "sap-zeit",
+      "source": "./",
+      "description": "SAP-Zeiterfassung per CLI mit Kerberos-SSO"
+    }
+  ]
+}

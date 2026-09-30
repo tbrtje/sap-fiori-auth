@@ -1,0 +1,7 @@
+{
+  "name": "sap-zeit",
+  "version": "0.1.0",
+  "description": "SAP-Zeiterfassung (CATS / Fiori „Meine Zeiterfassung“) per CLI mit Kerberos-SSO: anzeigen, buchen, ändern, löschen, freigeben.",
+  "author": { "name": "KI Hackathon Gruppe 7" },
+  "keywords": ["sap", "fiori", "cats", "zeiterfassung", "kerberos"]
+}

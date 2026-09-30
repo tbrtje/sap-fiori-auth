@@ -1,3 +1,7 @@
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["requests", "requests-gssapi", "truststore"]
+# ///
 """zeit – CLI für die SAP-Zeiterfassung (CATS / HCM_TIMESHEET_MAN_SRV) mit Kerberos-SSO.
 
 Anmeldung: SPNEGO am NetWeaver-Portal liefert das SSO-Cookie MYSAPSSO2, das auch

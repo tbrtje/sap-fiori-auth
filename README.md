@@ -6,12 +6,26 @@ das auch das Fiori-Gateway akzeptiert. Die CLI speichert keine Passwörter und k
 
 ## Installation
 
-```bash
-uv tool install --editable .     # stellt den Befehl `zeit` bereit
-# oder ohne Installation: .venv/bin/python zeit.py ...
+Voraussetzungen: ein gültiges Kerberos-Ticket (`klist`, bei Bedarf `kinit`) und [`uv`](https://docs.astral.sh/uv/) (`brew install uv`).
+
+### Als Claude-Code-Plugin
+
+```
+/plugin marketplace add git@ssh.dev.azure.com:v3/btc-cloud-aws/KI%20Hackathon/gruppe7
+/plugin install sap-zeit@gruppe7
 ```
 
-Voraussetzung ist ein gültiges Kerberos-Ticket (`klist`, bei Bedarf `kinit`).
+Danach kann Claude die Zeiterfassung direkt bedienen, zum Beispiel „zeig meine Woche“ oder
+„buch heute 9–10 CSIRT-71 auf CSIRT Operation“. Der Skill `sap-zeit:zeit` erklärt Claude die
+CLI und schreibt vor, dass Claude vor jeder Buchung einen Dry-Run zeigt. `zeit` liegt
+außerdem im PATH der Claude-Session. Updates holst du mit `/plugin marketplace update gruppe7`.
+
+### Als Kommandozeilen-Tool
+
+```bash
+uv tool install --editable .     # stellt den Befehl `zeit` bereit
+# oder ohne Installation: uv run zeit.py ...  (Abhängigkeiten stehen im Skript-Header)
+```
 
 ## Benutzung
 

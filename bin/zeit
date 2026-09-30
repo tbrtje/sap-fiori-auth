@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# Startet zeit.py aus dem Plugin-Verzeichnis. uv installiert die Abhängigkeiten beim ersten Aufruf.
+set -euo pipefail
+src="${BASH_SOURCE[0]}"
+while [ -L "$src" ]; do
+  dir="$(cd -P "$(dirname "$src")" && pwd)"
+  src="$(readlink "$src")"
+  [[ "$src" != /* ]] && src="$dir/$src"
+done
+root="$(cd -P "$(dirname "$src")/.." && pwd)"
+if ! command -v uv >/dev/null 2>&1; then
+  echo "Fehler: 'uv' wird benötigt (brew install uv)." >&2
+  exit 127
+fi
+exec uv run --quiet --script "$root/zeit.py" "$@"
