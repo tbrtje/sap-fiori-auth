@@ -72,7 +72,7 @@ lass sie bestätigen und führe dann ein `zeit add` pro Eintrag aus.
 
 | Meldung | Vorgehen |
 |---|---|
-| `Browser-Anmeldung abgelaufen` / `Nicht angemeldet (Weiterleitung …)` | Der User soll `! zeit login` ausführen (öffnet ein Fenster für die M365-Anmeldung). Den Befehl nicht selbst ausführen |
+| `Browser-Anmeldung abgelaufen` / `Nicht angemeldet (Weiterleitung …)` | Der User soll `! zeit login NAME` ausführen (z. B. `btp`) (öffnet ein Fenster für die M365-Anmeldung). Den Befehl nicht selbst ausführen |
 | `System … ist nicht konfiguriert` | Einrichten mit `! zeit login NAME --url LAUNCHPAD-URL`. Die URL erfragst du beim User |
 | `Kerberos-Anmeldung fehlgeschlagen` | macOS/Linux: der User soll `! kinit` ausführen. Windows: mit dem Domänenkonto angemeldet? Immer auch prüfen, ob VPN/Firmennetz aktiv ist |
 | `… Projekte passen zu …` | Kandidaten zeigen und den User wählen lassen |

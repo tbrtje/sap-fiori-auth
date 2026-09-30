@@ -3,6 +3,8 @@
 CLI für die Fiori-App „Meine Zeiterfassung“ (CATS, OData-Service `HCM_TIMESHEET_MAN_SRV`).
 Die Anmeldung läuft per Kerberos: SPNEGO am Portal liefert das SSO-Cookie `MYSAPSSO2`,
 das auch das Fiori-Gateway akzeptiert. Die CLI speichert keine Passwörter und keine Cookies.
+Für Systeme ohne Kerberos (z. B. SAP BTP mit M365-Login) gibt es alternativ eine
+[Browser-Anmeldung](#zweites-system-mit-m365-anmeldung-sap-btp).
 
 ## Installation
 
@@ -61,7 +63,8 @@ BEMOT: `01` abrechenbar (Default), `02` nicht abrechenbar, `05` Reisezeit.
 ### Zweites System mit M365-Anmeldung (SAP BTP)
 
 Für Systeme ohne Kerberos, deren Anmeldung über Microsoft 365 läuft, gibt es eine Browser-Anmeldung
-mit eigenem Profil. Deine Browser-Cookies werden dabei nicht ausgelesen:
+mit eigenem Profil. Deine Browser-Cookies werden dabei nicht ausgelesen. Voraussetzung ist ein
+installiertes Microsoft Edge oder Google Chrome:
 
 ```bash
 zeit login btp --url "https://…launchpad.cfapps.eu20.hana.ondemand.com/site?siteId=…"
@@ -79,7 +82,11 @@ zeit -s btp add heute 9-10 csop CSIRT-71
 
 Soll `btp` der Standard sein, setzt `zeit login btp --standard` das in der Config (`"system": "btp"`).
 `zeit -s kerberos …` nutzt dann trotzdem Kerberos. Ist die Microsoft-Anmeldung abgelaufen, meldet
-dich `zeit login btp` neu an.
+dich `zeit login btp` neu an (die URL ist dann schon gespeichert).
+
+Das Profil unter `~/.local/share/sap-zeit/browser/btp` hält die Microsoft-Anmeldung und ist damit
+so schützenswert wie ein Passwort. Abmelden heißt: diesen Ordner löschen. Jeder Aufruf startet den
+Browser kurz im Hintergrund und dauert deshalb einige Sekunden länger als mit Kerberos.
 
 Die Konfiguration liegt in `~/.config/sap-zeit/config.json`. Dort stehen die Aliase und optional
 `pernr`, `service_url`, `portal_url`, `sap_client`, `default_awart` und `default_bemot`. Unter `systems`
