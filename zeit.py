@@ -161,7 +161,7 @@ class Timesheet:
         return self._csrf
 
     def submit(self, entries: list[dict]) -> list[dict]:
-        """Sendet TimeEntries als ein Changeset (alles oder nichts)."""
+        """Sendet TimeEntries in einem $batch, je Buchung ein Changeset (Teilerfolg möglich)."""
         batch, changeset = f"batch_{uuid.uuid4().hex}", f"changeset_{uuid.uuid4().hex}"
         parts = []
         for e in entries:

@@ -47,3 +47,8 @@ Die Konfiguration liegt in `~/.config/sap-zeit/config.json`. Dort stehen die Ali
 - Schreibzugriffe gehen als `$batch`-POST auf `TimeEntries` mit `TimeEntryOperation` C/U/D.
   Das Gateway erlaubt nur eine Operation pro Changeset.
 - Die Leistungsart (LSTAR) leitet SAP selbst ab, im Moment `8990`.
+
+## Weitere Dokumentation
+
+- [docs/API.md](docs/API.md): SAP-Schnittstelle (Anmeldung, OData-Service, `$batch`-Format, Felder, Fehlerbilder)
+- [docs/FUNKTIONSWEISE.md](docs/FUNKTIONSWEISE.md): Aufbau und Arbeitsweise der CLI, Befehle, Einschränkungen
