@@ -43,6 +43,37 @@ sequenceDiagram
 - Auf Windows-Rechnern in der Domäne liefert SSPI das Ticket aus der Windows-Anmeldung. Der SPN ist
   derselbe (`HTTP/portal.btc-ag.com`).
 
+### Alternative: Browser-Anmeldung (M365, SAP BTP)
+
+Systeme auf der SAP BTP (z. B. ein Launchpad unter `…launchpad.cfapps.eu20.hana.ondemand.com`)
+kennen kein Kerberos. Dort steht ein App-Router vor dem Service, der über XSUAA an Microsoft Entra ID
+(M365) weiterleitet. `zeit` nutzt dafür einen echten Browser mit eigenem Profil (Playwright):
+
+```mermaid
+sequenceDiagram
+    participant C as zeit (Playwright, headless)
+    participant AR as App-Router (BTP)
+    participant X as XSUAA
+    participant MS as Microsoft Entra ID
+    C->>AR: GET <service_url>/
+    AR-->>C: 302 zu XSUAA
+    C->>X: Anmeldung
+    X-->>C: 302 zu Microsoft
+    C->>MS: Anmeldung mit den Cookies im Profil („Angemeldet bleiben“)
+    MS-->>X: Token
+    X-->>AR: /login/callback
+    AR-->>C: Session-Cookie
+    Note over C: Cookies und User-Agent gehen in die requests-Session, Browser wird geschlossen
+    C->>AR: GET/POST OData, Cookie: Session
+```
+
+- Die Service-URL und den `sap-client` erkennt `zeit login` an den Requests der Fiori-App. Oft setzt
+  auf der BTP die Destination den Mandanten, dann entfällt `sap-client`.
+- Ohne gültige Session antwortet der App-Router nicht mit 401, sondern leitet auf die Anmeldung um.
+  `zeit` erkennt das am Host der Antwort.
+- Das Profil unter `~/.local/share/sap-zeit/browser/<NAME>` enthält die Microsoft-Anmeldung und ist
+  damit ein Login-Nachweis.
+
 ### Eigenheiten des Portals
 
 | Problem | Symptom | Lösung |

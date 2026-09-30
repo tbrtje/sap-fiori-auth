@@ -5,12 +5,16 @@
 #   "truststore",
 #   "requests-gssapi; sys_platform != 'win32'",
 #   "requests-negotiate-sspi; sys_platform == 'win32'",
+#   "playwright",
 # ]
 # ///
 """zeit – CLI für die SAP-Zeiterfassung (CATS / HCM_TIMESHEET_MAN_SRV) mit Kerberos-SSO.
 
 Anmeldung: SPNEGO am NetWeaver-Portal liefert das SSO-Cookie MYSAPSSO2, das auch
 vom Fiori-Gateway akzeptiert wird. Es werden keine Passwörter benötigt oder gespeichert.
+
+Alternativ (auth = "browser", z. B. SAP BTP mit M365-Login): Ein eigenes Browser-Profil hält die
+Microsoft-Anmeldung. Jeder Aufruf holt darüber headless die Session des App-Routers.
 """
 
 from __future__ import annotations
@@ -25,13 +29,14 @@ import sys
 import uuid
 from collections import defaultdict
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 import requests
 import truststore
 from requests.adapters import HTTPAdapter
 
 DEFAULTS = {
+    "auth": "kerberos",
     "portal_url": "https://portal.btc-ag.com/irj/portal",
     "service_url": "https://bgp.btcsap.btc-ag.com:44300/sap/opu/odata/sap/HCM_TIMESHEET_MAN_SRV",
     "sap_client": "300",
@@ -39,8 +44,14 @@ DEFAULTS = {
     "default_awart": "0800",
     "default_bemot": "01",
     "aliases": {},
+    "login_url": None,
+    "browser": None,
+    "system": None,
+    "systems": {},
 }
 CONFIG_PATH = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "sap-zeit" / "config.json"
+DATA_DIR = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share")) / "sap-zeit"
+SERVICE_RE = re.compile(r"^(https://[^?#]+?/sap/opu/odata/sap/[A-Z0-9_]*TIMESHEET[A-Z0-9_]*)(?=[/?;]|$)")
 
 # Das Portal akzeptiert nur ein Browser-ähnliches User-Agent.
 USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0 Safari/537.36"
@@ -58,17 +69,24 @@ class ZeitError(Exception):
 
 # ---------------------------------------------------------------- Konfiguration
 
-def load_config() -> dict:
+def read_config_file() -> dict:
+    return json.loads(CONFIG_PATH.read_text()) if CONFIG_PATH.exists() else {}
+
+
+def load_config(system: str | None = None) -> dict:
+    """Config-Datei über den Defaults, darüber die Einstellungen des gewählten Systems.
+    Ohne System (oder mit "kerberos") gelten nur die Werte der obersten Ebene, also Kerberos am Portal."""
     cfg = dict(DEFAULTS)
-    if CONFIG_PATH.exists():
-        cfg.update(json.loads(CONFIG_PATH.read_text()))
+    cfg.update(read_config_file())
+    name = system or os.environ.get("ZEIT_SYSTEM") or cfg["system"]
+    cfg["system"] = None if name == "kerberos" and name not in cfg["systems"] else name
+    cfg.update(cfg["systems"].get(cfg["system"], {}))
     return cfg
 
 
-def save_config(cfg: dict) -> None:
+def save_config(raw: dict) -> None:
     CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    stored = {k: v for k, v in cfg.items() if DEFAULTS.get(k) != v or k == "aliases"}
-    CONFIG_PATH.write_text(json.dumps(stored, indent=2, ensure_ascii=False) + "\n")
+    CONFIG_PATH.write_text(json.dumps(raw, indent=2, ensure_ascii=False) + "\n")
 
 
 # ---------------------------------------------------------------- HTTP / SAP
@@ -93,6 +111,49 @@ def _negotiate_auth(host: str) -> requests.auth.AuthBase:
     return HTTPSPNEGOAuth(mutual_authentication=OPTIONAL)
 
 
+def _browser_context(p, cfg: dict, headless: bool):
+    """Startet Edge, Chrome oder Chromium mit dem eigenen Profil des Systems (nicht dem des Users)."""
+    from playwright.sync_api import Error as PlaywrightError
+    profile = DATA_DIR / "browser" / (cfg["system"] or "default")
+    profile.mkdir(parents=True, exist_ok=True)
+    errors = []
+    for ch in [cfg["browser"]] if cfg.get("browser") else ["msedge", "chrome", "chromium"]:
+        try:
+            return p.chromium.launch_persistent_context(profile, channel=None if ch == "chromium" else ch,
+                                                        headless=headless, no_viewport=not headless)
+        except PlaywrightError as e:
+            errors.append(f"{ch}: {str(e).strip().splitlines()[0]}")
+    raise ZeitError("Kein Browser startbar (läuft schon ein 'zeit login'?):\n  " + "\n  ".join(errors))
+
+
+def _on_host(url: str, host: str) -> bool:
+    u = urlparse(url)
+    return u.hostname == host and "/login/callback" not in u.path
+
+
+def _browser_session(cfg: dict, target: str) -> tuple[list[dict], str]:
+    """Öffnet target headless im Browser-Profil; die Microsoft-Anmeldung läuft dort ohne Rückfrage durch.
+    Liefert die Cookies für target und den User-Agent des Browsers."""
+    from playwright.sync_api import TimeoutError as PlaywrightTimeout
+    from playwright.sync_api import sync_playwright
+    host = urlparse(target).hostname
+    with sync_playwright() as p:
+        ctx = _browser_context(p, cfg, headless=True)
+        try:
+            page = ctx.pages[0] if ctx.pages else ctx.new_page()
+            ua = page.evaluate("navigator.userAgent").replace("HeadlessChrome", "Chrome")
+            ctx.set_extra_http_headers({"User-Agent": ua})
+            try:
+                page.goto(target, timeout=60_000)
+                page.wait_for_url(lambda u: _on_host(u, host), timeout=30_000)
+            except PlaywrightTimeout:
+                raise ZeitError(f"Browser-Anmeldung abgelaufen (hängt bei {urlparse(page.url).hostname}). "
+                                f"Neu anmelden mit: zeit login {cfg['system'] or ''}".rstrip()) from None
+            return ctx.cookies([target]), ua
+        finally:
+            ctx.close()
+
+
 class Timesheet:
     def __init__(self, cfg: dict):
         self.cfg = cfg
@@ -105,6 +166,10 @@ class Timesheet:
         self._login()
 
     def _login(self) -> None:
+        if self.cfg["auth"] == "browser":
+            return self._browser_login()
+        if self.cfg["auth"] != "kerberos":
+            raise ZeitError(f"Unbekannte Anmeldemethode {self.cfg['auth']!r} (kerberos oder browser).")
         try:
             r = self.s.get(self.cfg["portal_url"], auth=_negotiate_auth(urlparse(self.cfg["portal_url"]).hostname), timeout=30)
         except requests.RequestException as e:
@@ -112,8 +177,31 @@ class Timesheet:
         if r.status_code == 401 or "MYSAPSSO2" not in self.s.cookies:
             raise ZeitError("Kerberos-Anmeldung fehlgeschlagen. Gültiges Ticket vorhanden? (klist / kinit)")
 
+    def _browser_login(self) -> None:
+        if not self.cfg.get("service_url") or self.cfg["service_url"] == DEFAULTS["service_url"]:
+            raise ZeitError(f"Service-URL für System {self.cfg['system']!r} unbekannt. Einrichten mit: "
+                            "zeit login NAME --url LAUNCHPAD-URL")
+        cookies, ua = _browser_session(self.cfg, f"{self.svc}/{self._client_qs()}")
+        self.s.headers["User-Agent"] = ua
+        self.s.hooks["response"].append(self._check_redirect)
+        for c in cookies:
+            self.s.cookies.set(c["name"], c["value"], domain=c["domain"], path=c["path"], secure=c["secure"])
+
+    def _check_redirect(self, r: requests.Response, **_) -> None:
+        # Ohne gültige Session leitet der App-Router auf die Anmeldung um statt 401 zu liefern.
+        if urlparse(r.url).hostname != urlparse(self.svc).hostname:
+            raise ZeitError(f"Nicht angemeldet (Weiterleitung zu {urlparse(r.url).hostname}). "
+                            f"Neu anmelden mit: zeit login {self.cfg['system'] or ''}".rstrip())
+
+    def _client(self) -> dict:
+        # Auf der BTP setzt oft die Destination den Mandanten, dann ist sap_client leer.
+        return {"sap-client": self.cfg["sap_client"]} if self.cfg["sap_client"] else {}
+
+    def _client_qs(self) -> str:
+        return f"?sap-client={self.cfg['sap_client']}" if self.cfg["sap_client"] else ""
+
     def _params(self, extra: dict | None = None) -> dict:
-        p = {"sap-client": self.cfg["sap_client"], "$format": "json"}
+        p = {**self._client(), "$format": "json"}
         p.update(extra or {})
         return p
 
@@ -178,7 +266,7 @@ class Timesheet:
 
     def _csrf_token(self) -> str:
         if not self._csrf:
-            r = self.s.get(self.svc + "/", params={"sap-client": self.cfg["sap_client"]},
+            r = self.s.get(self.svc + "/", params=self._client(),
                            headers={"X-CSRF-Token": "Fetch"}, timeout=30)
             self._csrf = r.headers.get("x-csrf-token")
             if not self._csrf:
@@ -193,7 +281,7 @@ class Timesheet:
             body = json.dumps(e, ensure_ascii=False).encode()
             parts.append(
                 f"--{changeset}\r\nContent-Type: application/http\r\nContent-Transfer-Encoding: binary\r\n\r\n"
-                f"POST TimeEntries?sap-client={self.cfg['sap_client']} HTTP/1.1\r\n"
+                f"POST TimeEntries{self._client_qs()} HTTP/1.1\r\n"
                 f"Content-Type: application/json\r\nAccept: application/json\r\nContent-Length: {len(body)}\r\n\r\n".encode()
                 + body + b"\r\n"
             )
@@ -204,7 +292,7 @@ class Timesheet:
             + f"--{changeset}{i}--\r\n".encode()
             for i, part in enumerate(parts)
         ) + f"--{batch}--\r\n".encode()
-        r = self.s.post(f"{self.svc}/$batch", params={"sap-client": self.cfg["sap_client"]}, data=payload, timeout=120,
+        r = self.s.post(f"{self.svc}/$batch", params=self._client(), data=payload, timeout=120,
                         headers={"Content-Type": f"multipart/mixed; boundary={batch}",
                                  "X-CSRF-Token": self._csrf_token(), "Accept": "application/json"})
         if r.status_code != 202:
@@ -451,12 +539,12 @@ def cmd_alias(ts_factory, cfg: dict, a) -> None:
         ts = ts_factory()
         proj, _ = resolve_project(ts, cfg, a.projekt, dt.date.today())
         aliases[a.name] = {k: v for k, v in {"posid": proj["posid"], "bemot": a.bemot, "awart": a.awart}.items() if v}
-        save_config(cfg)
+        save_config({**read_config_file(), "aliases": aliases})
         print(f"Alias {a.name} → {proj['posid']} {proj['text']}")
     elif a.aktion == "rm":
         if aliases.pop(a.name, None) is None:
             raise ZeitError(f"Alias {a.name!r} existiert nicht.")
-        save_config(cfg)
+        save_config({**read_config_file(), "aliases": aliases})
         print(f"Alias {a.name} entfernt.")
     else:
         if not aliases:
@@ -466,11 +554,72 @@ def cmd_alias(ts_factory, cfg: dict, a) -> None:
             print(f"{name:<12} {v['posid']:<20} {extra}")
 
 
+def cmd_login(cfg: dict, a) -> None:
+    """Interaktive M365-Anmeldung im eigenen Browser-Profil; erkennt dabei die Service-URL der Zeiterfassung."""
+    from playwright.sync_api import Error as PlaywrightError
+    from playwright.sync_api import sync_playwright
+    name = a.name or cfg["system"]
+    if not name:
+        raise ZeitError("Systemname fehlt: zeit login NAME --url LAUNCHPAD-URL")
+    raw = read_config_file()
+    sysc = raw.setdefault("systems", {}).setdefault(name, {"auth": "browser"})
+    if a.url:
+        sysc["login_url"] = a.url
+    if sysc.get("auth") != "browser" or not sysc.get("login_url"):
+        raise ZeitError(f"System {name!r} hat keine Browser-Anmeldung. Einrichten mit: zeit login {name} --url LAUNCHPAD-URL")
+    lcfg = {**DEFAULTS, **raw, **sysc, "system": name}
+    known = sysc.get("service_url")
+    found: dict[str, str] = {}
+
+    def on_request(req) -> None:
+        if m := SERVICE_RE.match(req.url):
+            found.setdefault("service_url", m.group(1))
+            if client := parse_qs(urlparse(req.url).query).get("sap-client"):
+                found.setdefault("sap_client", client[0])
+
+    print("Browserfenster öffnet sich. Melde dich mit deinem M365-Konto an ('Angemeldet bleiben': Ja)"
+          + ("." if known else " und öffne dann die App „Meine Zeiterfassung“.")
+          + " Das Fenster schließt sich danach von selbst.", file=sys.stderr)
+    with sync_playwright() as p:
+        ctx = _browser_context(p, lcfg, headless=False)
+        ctx.on("request", on_request)
+        page = ctx.pages[0] if ctx.pages else ctx.new_page()
+        done = lambda: "service_url" in found or bool(known) and any(_on_host(pg.url, urlparse(known).hostname) for pg in ctx.pages)
+        ok = False
+        try:
+            page.goto(sysc["login_url"], timeout=0)
+            while ctx.pages and not (ok := done()):
+                ctx.pages[0].wait_for_timeout(500)
+            if ok:
+                ctx.pages[0].wait_for_timeout(3000)  # weitere Requests der App abwarten (sap-client)
+        except PlaywrightError:
+            ok = ok or "service_url" in found  # Fenster oder Browser wurde geschlossen
+        finally:
+            ctx.close()
+    if not ok:
+        raise ZeitError("Fenster geschlossen, bevor die Zeiterfassung geöffnet wurde. Bitte erneut: zeit login " + name)
+    if "service_url" in found and found["service_url"] != known:
+        sysc["service_url"] = found["service_url"]
+        sysc["sap_client"] = found.get("sap_client", "")
+        print(f"Service erkannt: {sysc['service_url']}" + (f" (sap-client {sysc['sap_client']})" if sysc["sap_client"] else ""))
+        if not sysc["service_url"].endswith("/HCM_TIMESHEET_MAN_SRV"):
+            print("Warnung: Das ist nicht HCM_TIMESHEET_MAN_SRV. zeit unterstützt nur diesen Service, "
+                  "Aufrufe können daher fehlschlagen.", file=sys.stderr)
+    if a.standard:
+        raw["system"] = name
+    save_config(raw)
+    ts = Timesheet(load_config(name))
+    print(f"Angemeldet an {name!r}, Personalnummer {ts.pernr}."
+          + ("" if raw.get("system") == name else f" Nutzen mit: zeit -s {name} show (oder zeit login {name} --standard)"))
+
+
 # ---------------------------------------------------------------- CLI
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="zeit", description="SAP-Zeiterfassung per Kerberos-SSO.",
                                 epilog="Datumsangaben: heute/h, gestern/g, morgen, mo..so (aktuelle Woche), -2, 30.09., 2026-09-30")
+    p.add_argument("-s", "--system", help="System aus 'systems' der Config, z. B. btp; 'kerberos' = Portal-Anmeldung "
+                                          "(Default: $ZEIT_SYSTEM, sonst 'system' der Config, sonst kerberos)")
     sub = p.add_subparsers(dest="cmd", required=True)
 
     s = sub.add_parser("show", aliases=["woche", "w"], help="Buchungen der Woche (oder eines Tages) anzeigen")
@@ -527,6 +676,13 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--bemot")
     s.add_argument("--awart")
     s.set_defaults(func=cmd_alias)
+
+    s = sub.add_parser("login", help="Browser-Anmeldung (M365) für ein System einrichten oder erneuern",
+                       description="Beispiel: zeit login btp --url https://…launchpad.cfapps.eu20.hana.ondemand.com/site?siteId=…")
+    s.add_argument("name", nargs="?", help="Systemname in der Config (Default: gewähltes System)")
+    s.add_argument("--url", help="Launchpad-URL (nur beim ersten Mal nötig)")
+    s.add_argument("--standard", action="store_true", help="System als Standard statt Kerberos setzen")
+    s.set_defaults(func=cmd_login)
     return p
 
 
@@ -535,9 +691,13 @@ def main(argv: list[str] | None = None) -> int:
     for stream in (sys.stdout, sys.stderr):
         stream.reconfigure(encoding="utf-8")
     args = build_parser().parse_args(argv)
-    cfg = load_config()
     try:
-        if args.func is cmd_alias:
+        cfg = load_config(args.system)
+        if cfg["system"] and cfg["system"] not in cfg["systems"] and args.func is not cmd_login:
+            raise ZeitError(f"System {cfg['system']!r} ist nicht konfiguriert. Einrichten mit: zeit login {cfg['system']} --url LAUNCHPAD-URL")
+        if args.func is cmd_login:
+            args.func(cfg, args)
+        elif args.func is cmd_alias:
             if args.aktion in ("add", "rm") and not args.name or args.aktion == "add" and not args.projekt:
                 raise ZeitError("Verwendung: zeit alias add NAME PROJEKT | zeit alias rm NAME")
             args.func(lambda: Timesheet(cfg), cfg, args)

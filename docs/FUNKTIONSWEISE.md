@@ -1,7 +1,7 @@
 # Funktionsweise von `zeit`
 
 `zeit` ist ein einzelnes Python-Modul (`zeit.py`) und nutzt die Bibliotheken `requests`,
-`requests-gssapi` und `truststore`. Was die SAP-Schnittstelle kann, steht in [API.md](API.md).
+`requests-gssapi` und `truststore`, für die Browser-Anmeldung außerdem `playwright`. Was die SAP-Schnittstelle kann, steht in [API.md](API.md).
 
 ## Überblick
 
@@ -15,13 +15,16 @@ flowchart LR
     CMD --> CFG[("~/.config/sap-zeit/<br/>config.json")]
     TS -->|SPNEGO| PORTAL["Portal"]
     TS -->|MYSAPSSO2| GW["Gateway<br/>HCM_TIMESHEET_MAN_SRV"]
+    TS -.->|"auth: browser"| PW["Playwright<br/>Browser-Profil"]
+    PW -.->|M365| AR["App-Router (BTP)<br/>HCM_TIMESHEET_MAN_SRV"]
+    TS -.->|Session-Cookie| AR
 ```
 
 Ablauf eines Aufrufs:
 
-1. `main()` liest die Konfiguration (`load_config`) und die Argumente.
-2. Außer bei `alias list` und `alias rm` wird ein `Timesheet` erzeugt. Dabei läuft sofort die
-   Kerberos-Anmeldung.
+1. `main()` liest die Argumente und die Konfiguration (`load_config`) für das gewählte System.
+2. Außer bei `alias list`, `alias rm` und `login` wird ein `Timesheet` erzeugt. Dabei läuft sofort die
+   Anmeldung, je nach `auth` per Kerberos oder über das Browser-Profil.
 3. Der passende `cmd_*`-Befehl liest oder schreibt über `Timesheet`.
 4. Fachliche Fehler werfen `ZeitError`. `main()` gibt sie als `Fehler: …` auf stderr aus und
    beendet sich mit Exit-Code 1. Strg+C ergibt Exit-Code 130.
@@ -31,8 +34,10 @@ Ablauf eines Aufrufs:
 ### Konfiguration
 
 `DEFAULTS` enthält Portal- und Service-URL, den Mandanten und die Default-Werte für AWART (`0800`)
-und BEMOT (`01`). `config.json` überschreibt diese Werte. `save_config` schreibt nur Werte, die vom
-Default abweichen, sowie die Aliase.
+und BEMOT (`01`). `config.json` überschreibt diese Werte. Ist ein System gewählt (`-s NAME`, sonst
+`$ZEIT_SYSTEM`, sonst `"system"` in der Config), überschreiben dessen Einträge unter `systems` die
+Werte noch einmal. Ohne System oder mit `-s kerberos` gilt die oberste Ebene, also Kerberos. Die Aliase gelten für alle Systeme. `save_config` schreibt die Config-Datei
+zurück und ändert dabei nur die Aliase bzw. das System, das `zeit login` einrichtet.
 
 ```json
 {
@@ -40,7 +45,15 @@ Default abweichen, sowie die Aliase.
     "csop": {"posid": "NX.000037.20.0001"},
     "ausb": {"posid": "NM.000031.20.0005", "bemot": "02"}
   },
-  "pernr": "000xxxxx"
+  "pernr": "000xxxxx",
+  "systems": {
+    "btp": {
+      "auth": "browser",
+      "login_url": "https://…launchpad.cfapps.eu20.hana.ondemand.com/site?siteId=…",
+      "service_url": "https://…/sap/opu/odata/sap/HCM_TIMESHEET_MAN_SRV",
+      "sap_client": ""
+    }
+  }
 }
 ```
 
@@ -51,7 +64,8 @@ Default abweichen, sowie die Aliase.
 
 | Methode | Aufgabe | SAP-Aufruf |
 |---|---|---|
-| `_login()` | Kerberos-Anmeldung am Portal, prüft `MYSAPSSO2` | `GET /irj/portal` mit SPNEGO |
+| `_login()` | Kerberos-Anmeldung am Portal, prüft `MYSAPSSO2`; bei `auth: "browser"` stattdessen `_browser_login()` | `GET /irj/portal` mit SPNEGO |
+| `_browser_login()` | Holt die Cookies des App-Routers über `_browser_session()`, prüft Weiterleitungen (`_check_redirect`) | `GET <service_url>/` im headless Browser |
 | `pernr` (Property, lazy) | Personalnummer | `ConcurrentEmploymentSet` |
 | `get(set, filter)` | Generischer OData-Read, Fehler ergeben `ZeitError` | `GET <Set>?$filter=…` |
 | `entries(von, bis)` | Buchungen, von Zeilen je Feld zu Datensätzen zusammengeführt, sortiert | `TimeDataList` |
@@ -70,7 +84,7 @@ Die Session nutzt `_TLSAdapter`. Der Adapter verwendet den macOS-Trust-Store (`t
 erlaubt zusätzlich den Cipher `AES128-GCM-SHA256`, den das Portal braucht. Außerdem schickt die
 Session einen Browser-User-Agent mit, weil das Portal andere Clients ablehnt.
 
-Sessions und Cookies werden **nicht** gespeichert. Jeder Aufruf meldet sich neu per Kerberos an
+Bei Kerberos werden Sessions und Cookies **nicht** gespeichert. Jeder Aufruf meldet sich neu an
 (etwa eine Sekunde). Der Vorteil: Es liegt kein Login-Nachweis auf der Platte.
 
 `submit()` wertet die Multipart-Antwort Changeset für Changeset aus (`_batch_parts`). Wenn ein
@@ -80,6 +94,27 @@ sind deshalb **nicht atomar**: Ein Teil kann durchgehen, ein anderer nicht.
 
 `time_entry()` baut das JSON für `TimeEntries`. Die Stunden (`CATSHOURS`) rechnet es aus Von und Bis
 aus. Beim Löschen schickt es nur Datum und `0.00`.
+
+### Browser-Anmeldung (`auth: "browser"`)
+
+Für Systeme mit M365-Login, zum Beispiel das Launchpad auf der SAP BTP, gibt es kein Kerberos.
+Stattdessen hat jedes System ein eigenes Browser-Profil unter `~/.local/share/sap-zeit/browser/<NAME>`.
+Dieses Profil ist vom normalen Browser des Users getrennt. `zeit` liest keine Cookies aus dem
+normalen Browser.
+
+- `zeit login NAME --url LAUNCHPAD-URL` öffnet Edge, Chrome oder Chromium (in dieser Reihenfolge,
+  festlegbar mit `"browser"`) sichtbar mit diesem Profil. Der User meldet sich an und öffnet
+  „Meine Zeiterfassung“. `zeit` erkennt die OData-Service-URL und den `sap-client` an den Requests
+  der App und speichert sie. Danach schließt sich das Fenster.
+- Bei jedem weiteren Aufruf öffnet `_browser_session()` die Service-URL headless im Profil. Der
+  App-Router leitet zu XSUAA und Microsoft weiter. Weil das Profil die Microsoft-Anmeldung hält
+  („Angemeldet bleiben“), läuft das ohne Rückfrage durch. Die Cookies des App-Routers gehen dann in
+  die `requests`-Session, danach wird der Browser geschlossen. Das dauert einige Sekunden.
+- Landet der Browser nicht wieder auf dem Service-Host (MFA oder Anmeldung abgelaufen), oder leitet
+  der App-Router später auf die Anmeldung um, meldet `zeit`: `zeit login NAME` ausführen.
+
+Das Browser-Profil ist ein Login-Nachweis für das M365-Konto und muss wie ein Passwort geschützt
+werden. Solange `zeit login` läuft, ist das Profil gesperrt. Parallele Aufrufe schlagen dann fehl.
 
 ### Projektauflösung (`resolve_project`)
 
@@ -118,6 +153,9 @@ Der Kurztext wird vor dem Senden auf 40 Zeichen geprüft (`LTXA1_MAX`).
 | `rm COUNTER… [-y] [--date]` | `del`, `loesche` | TimeDataList | `D` | ja (außer `-y`) |
 | `freigeben [DATUM] [-t] [-y]` | `release` | TimeDataList | `U` + `X` | ja (außer `-y`) |
 | `alias [list\|add NAME PROJEKT [--bemot] [--awart]\|rm NAME]` | | WorkListCollection (nur `add`) | Config | – |
+| `login [NAME] [--url LAUNCHPAD-URL] [--standard]` | | ConcurrentEmploymentSet (Test) | Config, Browser-Profil | Browserfenster |
+
+Globale Option vor dem Befehl: `-s NAME` bzw. `--system NAME` wählt das System, `-s kerberos` erzwingt Kerberos.
 
 Hinweise:
 
@@ -128,6 +166,9 @@ Hinweise:
 - **`freigeben`** nimmt alle Buchungen mit Status `MSAVE` aus der Woche (oder mit `-t` aus dem Tag)
   und schickt sie mit `TimeEntryRelease = "X"` erneut. *Noch nicht an echten Buchungen getestet.*
 - **`-f` bei `add`/`edit`** gibt direkt beim Speichern frei.
+- **`login`** richtet ein System mit Browser-Anmeldung ein oder erneuert die Anmeldung. Ohne `NAME`
+  gilt das gewählte System. `--url` braucht man nur beim ersten Mal. Zum Schluss meldet sich `login`
+  testweise an und zeigt die Personalnummer.
 
 ## Bekannte Einschränkungen
 
@@ -138,13 +179,16 @@ Hinweise:
 - Die Leistungsart setzt das Backend fest auf `8990`. Die CLI kann sie nicht beeinflussen.
 - Langtexte, Favoriten und Buchungen ohne Uhrzeit (nur Stunden) werden nicht unterstützt.
 - Mehrfach-Operationen sind nicht atomar (eine Operation pro Changeset).
+- Die Browser-Anmeldung braucht ein installiertes Edge oder Chrome (sonst Playwright-Chromium) und
+  dauert pro Aufruf einige Sekunden. Verlangt Microsoft eine erneute MFA, schlägt der headless Aufruf
+  fehl und `zeit login NAME` ist nötig. Unterstützt wird nur `HCM_TIMESHEET_MAN_SRV`.
 - Die TLS- und User-Agent-Anpassungen hängen am aktuellen Portal-Setup. Wenn das Portal modernisiert
   wird, kann der Cipher-Zusatz in `_TLSAdapter` entfallen.
 
 ## Entwicklung
 
 ```bash
-uv venv .venv && uv pip install --python .venv/bin/python requests requests-gssapi truststore
+uv venv .venv && uv pip install --python .venv/bin/python requests requests-gssapi truststore playwright
 .venv/bin/python zeit.py show
 .venv/bin/python zeit.py add heute 8-9 csop Test -n   # Dry-Run zeigt das JSON, das gesendet würde
 ```
