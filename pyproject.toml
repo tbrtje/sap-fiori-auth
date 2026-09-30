@@ -11,6 +11,10 @@ dependencies = [
   "playwright",
 ]
 
+[dependency-groups]
+# Build-Abhängigkeiten für sdists (gssapi hat unter Linux kein Wheel), damit auch sie gelockt sind.
+build = ["cython"]
+
 [project.scripts]
 zeit = "zeit:main"
 

@@ -37,6 +37,33 @@ uv tool install --editable .     # stellt den Befehl `zeit` bereit
 # oder ohne Installation: uv run zeit.py ...  (Abhängigkeiten stehen im Skript-Header)
 ```
 
+### Mit Nix (z. B. NixOS)
+
+```bash
+nix run .#zeit -- show           # direkt ausführen
+nix profile install .#zeit       # ins Benutzerprofil installieren
+```
+
+In einer NixOS-Konfiguration als Flake-Input einbinden:
+
+```nix
+inputs.sap-zeit.url = "git+ssh://git@ssh.dev.azure.com/v3/btc-cloud-aws/KI%20Hackathon/gruppe7";
+# …
+environment.systemPackages = [ inputs.sap-zeit.packages.${pkgs.system}.default ];
+# oder per Overlay: nixpkgs.overlays = [ inputs.sap-zeit.overlays.default ];  → pkgs.zeit
+```
+
+Das Standard-System lässt sich im Paket festlegen (entspricht `ZEIT_SYSTEM`, `-s` gilt weiterhin):
+
+```nix
+environment.systemPackages = [
+  (inputs.sap-zeit.packages.${pkgs.system}.default.override { zeitSystem = "btp"; })
+];
+```
+
+Das Paket bringt für die Browser-Anmeldung das Playwright-Chromium aus nixpkgs mit, falls weder
+Edge noch Chrome installiert ist.
+
 ## Benutzung
 
 ```bash
