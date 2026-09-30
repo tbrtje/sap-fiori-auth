@@ -72,7 +72,8 @@ lass sie bestätigen und führe dann ein `zeit add` pro Eintrag aus.
 | `Kerberos-Anmeldung fehlgeschlagen` | Der User soll `! kinit` ausführen oder prüfen, ob VPN/Firmennetz aktiv ist |
 | `… Projekte passen zu …` | Kandidaten zeigen und den User wählen lassen |
 | `von SAP abgelehnt: …` | SAP-Meldung wörtlich weitergeben, nicht blind mit anderen Werten wiederholen |
-| `'uv' wird benötigt` | `brew install uv` vorschlagen |
+| `Einmalige Einrichtung: lade uv …` | Normal beim ersten Aufruf (ca. 10 s), einfach abwarten |
+| `Download von uv fehlgeschlagen` | Kein Internet oder Proxy blockiert: `brew install uv` vorschlagen oder Proxy (`https_proxy`) prüfen |
 
 Details zur Schnittstelle stehen in `${CLAUDE_PLUGIN_ROOT}/docs/API.md`, zur Arbeitsweise der
 CLI in `${CLAUDE_PLUGIN_ROOT}/docs/FUNKTIONSWEISE.md`.

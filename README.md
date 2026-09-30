@@ -6,7 +6,11 @@ das auch das Fiori-Gateway akzeptiert. Die CLI speichert keine Passwörter und k
 
 ## Installation
 
-Voraussetzungen: ein gültiges Kerberos-Ticket (`klist`, bei Bedarf `kinit`) und [`uv`](https://docs.astral.sh/uv/) (`brew install uv`).
+Es muss nichts vorinstalliert sein. Auf einem Firmen-Mac liegt das Kerberos-Ticket schon mit der
+Anmeldung vor (prüfen mit `klist`). Fehlt [`uv`](https://docs.astral.sh/uv/), lädt `bin/zeit` es beim ersten
+Aufruf mit Prüfsummen-Check nach `~/.local/share/sap-zeit/bin`. uv holt dann Python und die Pakete.
+Der erste Start braucht deshalb etwa 10 Sekunden und Internetzugriff (GitHub, PyPI, zusammen ca. 120 MB),
+danach dauert ein Aufruf rund 2 Sekunden. Shell-Profile und System bleiben unverändert.
 
 ### Als Claude-Code-Plugin
 
