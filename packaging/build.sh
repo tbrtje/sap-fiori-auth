@@ -21,7 +21,7 @@ build_macos() {
     echo "Fehler: macos-arm64 lässt sich nur auf einem ARM-Mac bauen." >&2
     return 1
   fi
-  uvx --python 3.12 --with requests --with truststore --with requests-gssapi \
+  uvx --python 3.12 --with requests --with truststore --with requests-gssapi --with playwright \
     pyinstaller --noconfirm --clean --onefile --name zeit --collect-submodules gssapi \
     --distpath dist/macos-arm64 --workpath build/pyinstaller --specpath build/pyinstaller \
     --log-level WARN zeit.py
