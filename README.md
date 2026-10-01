@@ -52,6 +52,8 @@ zeit edit 27753676 --zeit 8:45-9:30 --text CSIRT-71
 zeit rm 27753676
 zeit freigeben             # gespeicherte Buchungen der Woche freigeben
 
+zeit fav                   # Favoriten aus der Fiori-App anzeigen
+zeit gleitzeit             # Gleitzeitkonto: letzter genehmigter Zeitnachweis + Buchungen seitdem
 zeit alias add csop "csirt op"                      # Kurzname für ein Projekt
 zeit alias add ausb ausbildungsbetreuung --bemot 02 # mit Default-BEMOT
 ```
@@ -64,7 +66,7 @@ BEMOT: `01` abrechenbar (Default), `02` nicht abrechenbar, `05` Reisezeit.
 
 Für Systeme ohne Kerberos, deren Anmeldung über Microsoft 365 läuft, gibt es eine Browser-Anmeldung
 mit eigenem Profil. Deine Browser-Cookies werden dabei nicht ausgelesen. Voraussetzung ist ein
-installiertes Microsoft Edge oder Google Chrome:
+installiertes Google Chrome oder Microsoft Edge. `zeit` nimmt deinen Standardbrowser, falls er einer davon ist:
 
 ```bash
 zeit login btp --url "https://…launchpad.cfapps.eu20.hana.ondemand.com/site?siteId=…"
@@ -72,6 +74,10 @@ zeit login btp --url "https://…launchpad.cfapps.eu20.hana.ondemand.com/site?si
 
 Es öffnet sich ein Browserfenster. Melde dich an, wähle „Angemeldet bleiben“ und öffne die App
 „Meine Zeiterfassung“. `zeit` erkennt dabei die Service-URL und schließt das Fenster.
+
+Sind im Browser mehrere Microsoft-Konten angemeldet, fragt Microsoft nach dem Konto. `zeit` wählt es dann
+selbst aus. Ist keins festgelegt, probiert es die angemeldeten Konten durch und merkt sich das passende
+(`"account"` in der Config). Festlegen lässt es sich mit `zeit login btp --konto name@btc-ag.com`.
 
 Standardmäßig bleibt es bei Kerberos. Das zweite System wählst du pro Aufruf mit `-s`:
 
@@ -84,7 +90,7 @@ Soll `btp` der Standard sein, setzt `zeit login btp --standard` das in der Confi
 `zeit -s kerberos …` nutzt dann trotzdem Kerberos. Ist die Microsoft-Anmeldung abgelaufen, meldet
 dich `zeit login btp` neu an (die URL ist dann schon gespeichert).
 
-Das Profil unter `~/.local/share/sap-zeit/browser/btp` hält die Microsoft-Anmeldung und ist damit
+Das Profil unter `~/.local/share/sap-zeit/browser/btp/<Browser>` hält die Microsoft-Anmeldung und ist damit
 so schützenswert wie ein Passwort. Abmelden heißt: diesen Ordner löschen. Jeder Aufruf startet den
 Browser kurz im Hintergrund und dauert deshalb einige Sekunden länger als mit Kerberos.
 

@@ -9,6 +9,7 @@ dependencies = [
   "requests-gssapi; sys_platform != 'win32'",
   "requests-negotiate-sspi; sys_platform == 'win32'",
   "playwright",
+  "pypdf",
 ]
 
 [project.scripts]

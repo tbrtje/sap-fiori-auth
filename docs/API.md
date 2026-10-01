@@ -69,9 +69,14 @@ sequenceDiagram
 
 - Die Service-URL und den `sap-client` erkennt `zeit login` an den Requests der Fiori-App. Oft setzt
   auf der BTP die Destination den Mandanten, dann entfällt `sap-client`.
-- Ohne gültige Session antwortet der App-Router nicht mit 401, sondern leitet auf die Anmeldung um.
-  `zeit` erkennt das am Host der Antwort.
-- Das Profil unter `~/.local/share/sap-zeit/browser/<NAME>` enthält die Microsoft-Anmeldung und ist
+- Ohne gültige Session antwortet der App-Router nicht mit 401. Er leitet entweder auf die Anmeldung um oder
+  liefert mit HTTP 200 eine HTML-Seite (`document.cookie="fragmentAfterLogin=…"`), auch beim CSRF-Abruf
+  (dann fehlt der Header `x-csrf-token`). `zeit` erkennt beides (Host der Antwort bzw. HTML statt OData).
+- Sind im Profil mehrere Microsoft-Konten angemeldet, zeigt `login.microsoftonline.com` „Konto auswählen“.
+  Die Kacheln tragen die Adresse in `data-test-id` (Kleinbuchstaben). `zeit` klickt das konfigurierte Konto
+  (`account`) oder probiert die Konten der Reihe nach und speichert das erfolgreiche. „Angemeldet bleiben?“
+  bestätigt es mit `#idSIButton9`.
+- Das Profil unter `~/.local/share/sap-zeit/browser/<NAME>/<Browser>` enthält die Microsoft-Anmeldung und ist
   damit ein Login-Nachweis.
 
 ### Eigenheiten des Portals
@@ -125,7 +130,7 @@ Nicht freigegeben (HTTP 403) sind die Nachfolger- und Alternativ-Services `HCMFA
 | `InitialInfos` | ✓ (Filter Pernr) | – | Profil-Einstellungen (Profil `ESS`, Uhrzeiterfassung an, …) |
 | `ProfileFields` | ✓ | – | Eingabefelder des Profils |
 | `ValueHelpList` | ✓ | – | Wertehilfen (AWART, BEMOT, …) |
-| `Favorites` | ✓ | ✓ | Favoriten der Fiori-App (von der CLI nicht genutzt) |
+| `Favorites` | ✓ | ✓ (direkt, ohne `$batch`) | Favoriten der Fiori-App (siehe 4.8) |
 | `Summaries`, `TimeData` | ✓ | – | Kachel-Zusammenfassung (von der CLI nicht genutzt) |
 
 Filter mit Datumsbereich werden immer so formuliert (Datum als String `YYYYMMDD`):
@@ -325,6 +330,71 @@ Beim Ändern wird der ganze Datensatz geschickt, nicht nur die geänderten Felde
 | `MSAVE` | gespeichert, nicht freigegeben (gesichert) |
 | `MACTION` | vermutlich freigegeben (noch nicht abschließend geprüft) |
 | `MAPPROVED`, `MREJECTED` | genehmigt / abgelehnt (angenommen, bisher nicht gesehen) |
+
+### 4.8 Favoriten – `Favorites`
+
+Die Standard-App liest und schreibt Favoriten direkt, nicht über `$batch` (getestet am 30.09.2026 mit
+einem Test-Favoriten). Schreibzugriffe brauchen das CSRF-Token.
+
+```
+GET    Favorites?$filter=Pernr eq '<PERNR>'
+POST   Favorites                                   → 201, Entity mit neuer ID
+PUT    Favorites(ID='<ID>',Pernr='<PERNR>')        → 204
+DELETE Favorites(ID='<ID>',Pernr='<PERNR>')        → 204
+```
+
+| Feld | Beispiel | Hinweis |
+|---|---|---|
+| `ID` | `"20260410071809.4799770 "` | Zeitstempel, SAP liefert ein Leerzeichen am Ende. Im Schlüssel getrimmt verwenden |
+| `Name` | `TBW Daily` | Max. 30 Zeichen (Eingabefeld der Standard-App) |
+| `ObjType` | `F` | `F` = Favorit, `FW` = Arbeitsvorrat-Favorit |
+| `Field_Text` | `project, billable, TBW: MPM (IT-A-C)` | Anzeige: AWART-Text, BEMOT-Text, Projekt |
+| `FavoriteDataFields` | wie `TimeEntryDataFields` | Gefüllt sind `POSID`, `AWART`, `BEMOT`, `LTXA1`, `BEGUZ`, `ENDUZ` |
+
+Anlegen:
+
+```json
+{"Pernr": "<PERNR>", "Name": "TBW Daily",
+ "FavoriteDataFields": {"POSID": "NK.067500.10.0003", "AWART": "0800", "BEMOT": "01",
+                        "LTXA1": "Daily", "BEGUZ": "084500", "ENDUZ": "090000"}}
+```
+
+**`PUT` ändert nur den Namen.** Mitgeschickte `FavoriteDataFields` ignoriert SAP. Andere Daten
+bedeuten deshalb: neuen Favoriten anlegen und den alten löschen (neue ID).
+
+### 4.9 Abwesenheiten und Zeitkonten
+
+Abwesenheiten stehen als von SAP erzeugte Buchungen in `TimeDataList`, z. B. `LTXA1 = "generiert - 9001 - Urlaub"`,
+09:00–17:00, 8 h, ohne PSP-Element. An diesen Tagen ist `TargetHours` in `WorkCalendars` meist `0.00`.
+
+| AWART | Bedeutung | Wirkung auf Gleitzeit |
+|---|---|---|
+| `9001` | Urlaub | neutral |
+| `9003` | Gleittag | mindert das Konto um die Stunden |
+| `9005` | Abwesenheit (z. B. Krankheit) | neutral |
+
+Die Zeitkonten-Services (`HCMFAB_MYTIMEACCOUNTS_SRV`, `HCM_TIME_STATEMENT_SRV` usw.) antworten mit 403.
+Der Gleitzeitsaldo steht aber im monatlichen **Zeitnachweis** (PDF) aus „Meine Formulare“
+(so macht es auch die Browser-Erweiterung Clockmate):
+
+```
+GET /sap/opu/odata/sap/HCMFAB_MYFORMS_SRV/FormDisplaySet(EmployeeNumber='<PERNR>',FormType='SAP_INT_TIM_STM',
+    ParametersValues='BEGDA%3D20260801%40%3BENDDA%3D20260831')/$value
+→ application/pdf, ca. 350 KB, 2–3 s
+```
+
+Im Text stehen `Flextime Balance for Preceding Period    52.00` und `Total Flextime Balance    58.00`
+(deutsches Formular: `GLZ-Saldo aktuell`). Der Nachweis zählt nur **genehmigte** Buchungen. Für einen Monat
+mit offenen Buchungen ist der Saldo deshalb zu niedrig (September 2026: 26.75 statt ca. 56).
+
+`zeit gleitzeit` nimmt daher den letzten Monat, dessen Buchungen alle den Status `DONE`
+haben, und rechnen ab dem Folgetag bis gestern selbst: Arbeitszeit (AWART nicht 9xxx) − Soll, wobei das Soll
+um Abwesenheiten (9001, 9005 usw.) reduziert wird, nicht aber um Gleittage (9003). Abgeglichen mit den
+Zeitnachweisen Februar bis August 2026 stimmt das auf die Minute. Im Januar weicht es um 12 h ab
+(Freizeitausgleich, Abwesenheitsart 0900, und vermutlich eine Korrektur zum Jahreswechsel).
+
+**Achtung `WorkCalendars`:** Bei Zeiträumen ab etwa 4 Monaten liefert SAP an Abwesenheitstagen schon
+reduziertes Soll (`0.00`, `WorkingDay FALSE`), bei kürzeren das geplante (`8.00`). Deshalb monatsweise abfragen.
 
 ## 5. Fehlerbilder
 

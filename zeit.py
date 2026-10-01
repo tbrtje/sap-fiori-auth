@@ -6,6 +6,7 @@
 #   "requests-gssapi; sys_platform != 'win32'",
 #   "requests-negotiate-sspi; sys_platform == 'win32'",
 #   "playwright",
+#   "pypdf",
 # ]
 # ///
 """zeit – CLI für die SAP-Zeiterfassung (CATS / HCM_TIMESHEET_MAN_SRV) mit Kerberos-SSO.
@@ -28,6 +29,7 @@ import ssl
 import sys
 import uuid
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
@@ -45,6 +47,7 @@ DEFAULTS = {
     "default_bemot": "01",
     "aliases": {},
     "login_url": None,
+    "account": None,
     "browser": None,
     "system": None,
     "systems": {},
@@ -65,6 +68,18 @@ LTXA1_MAX = 40
 
 class ZeitError(Exception):
     pass
+
+
+class AuthError(ZeitError):
+    """Session abgelaufen (401/403 oder Umleitung zur Anmeldung). Neu verbinden hilft."""
+
+
+class LoginRequired(ZeitError):
+    """Nur eine interaktive Anmeldung hilft (zeit login)."""
+
+    def __init__(self, msg: str, system: str | None = None):
+        super().__init__(msg)
+        self.system = system
 
 
 # ---------------------------------------------------------------- Konfiguration
@@ -111,13 +126,52 @@ def _negotiate_auth(host: str) -> requests.auth.AuthBase:
     return HTTPSPNEGOAuth(mutual_authentication=OPTIONAL)
 
 
+def _default_browser() -> str | None:
+    """Playwright-Channel des Standardbrowsers, falls es Chrome oder Edge ist (Safari/Firefox gehen nicht)."""
+    ident = ""
+    try:
+        if sys.platform == "darwin":
+            import plistlib
+            plist = Path.home() / "Library/Preferences/com.apple.LaunchServices/com.apple.launchservices.secure.plist"
+            handlers = plistlib.loads(plist.read_bytes()).get("LSHandlers", [])
+            ident = next((h.get("LSHandlerRoleAll", "") for h in handlers if h.get("LSHandlerURLScheme") == "https"), "")
+        elif sys.platform == "win32":
+            import winreg
+            key = r"Software\Microsoft\Windows\Shell\Associations\UrlAssociations\https\UserChoice"
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key) as k:
+                ident = winreg.QueryValueEx(k, "ProgId")[0]
+        else:
+            import subprocess
+            ident = subprocess.run(["xdg-settings", "get", "default-web-browser"], capture_output=True, text=True).stdout
+    except Exception:
+        return None
+    ident = ident.lower()
+    return "chrome" if "chrome" in ident else "msedge" if "edge" in ident or "msedgehtm" in ident else None
+
+
+def _browser_profile(system: str, channel: str) -> Path:
+    """Eigenes Profil je System und Browser: Chrome kann die (per Schlüsselbund verschlüsselten) Cookies
+    eines Edge-Profils nicht lesen und umgekehrt."""
+    base = DATA_DIR / "browser" / system
+    if (base / "Local State").exists():
+        # Altes Layout (ein Edge-Profil direkt unter browser/<system>) einmalig nach browser/<system>/msedge.
+        tmp = base.with_name(base.name + ".migrate")
+        base.rename(tmp)
+        base.mkdir(parents=True)
+        tmp.rename(base / "msedge")
+    return base / channel
+
+
 def _browser_context(p, cfg: dict, headless: bool):
-    """Startet Edge, Chrome oder Chromium mit dem eigenen Profil des Systems (nicht dem des Users)."""
+    """Startet den Standardbrowser (sonst Chrome, Edge, Chromium) mit eigenem Profil des Systems, nicht dem des Users.
+    Fest wählen lässt er sich mit "browser" in der Config."""
     from playwright.sync_api import Error as PlaywrightError
-    profile = DATA_DIR / "browser" / (cfg["system"] or "default")
-    profile.mkdir(parents=True, exist_ok=True)
+    order = [cfg["browser"]] if cfg.get("browser") else list(dict.fromkeys(
+        [c for c in [_default_browser()] if c] + ["chrome", "msedge", "chromium"]))
     errors = []
-    for ch in [cfg["browser"]] if cfg.get("browser") else ["msedge", "chrome", "chromium"]:
+    for ch in order:
+        profile = _browser_profile(cfg["system"] or "default", ch)
+        profile.mkdir(parents=True, exist_ok=True)
         try:
             return p.chromium.launch_persistent_context(profile, channel=None if ch == "chromium" else ch,
                                                         headless=headless, no_viewport=not headless)
@@ -131,25 +185,58 @@ def _on_host(url: str, host: str) -> bool:
     return u.hostname == host and "/login/callback" not in u.path
 
 
-def _browser_session(cfg: dict, target: str) -> tuple[list[dict], str]:
+def _account_tiles(page) -> list[str]:
+    """E-Mail-Adressen der Kacheln in Microsofts „Konto auswählen“ (data-test-id = Adresse in Kleinbuchstaben)."""
+    ids = [el.get_attribute("data-test-id") or "" for el in page.query_selector_all("[data-test-id][role=button]")]
+    return [i for i in ids if "@" in i and not i.endswith("-menu-dots")]
+
+
+def _browser_session(cfg: dict, target: str) -> tuple[list[dict], str, str | None]:
     """Öffnet target headless im Browser-Profil; die Microsoft-Anmeldung läuft dort ohne Rückfrage durch.
-    Liefert die Cookies für target und den User-Agent des Browsers."""
-    from playwright.sync_api import TimeoutError as PlaywrightTimeout
+    Sind mehrere Microsoft-Konten angemeldet, fragt Microsoft nach dem Konto. Dann wird das konfigurierte
+    gewählt, sonst werden die Konten der Reihe nach probiert. Liefert Cookies, User-Agent und das gewählte Konto."""
+    import time
+    from playwright.sync_api import Error as PlaywrightError
     from playwright.sync_api import sync_playwright
     host = urlparse(target).hostname
+    wanted = (cfg.get("account") or "").lower()
     with sync_playwright() as p:
         ctx = _browser_context(p, cfg, headless=True)
         try:
             page = ctx.pages[0] if ctx.pages else ctx.new_page()
             ua = page.evaluate("navigator.userAgent").replace("HeadlessChrome", "Chrome")
             ctx.set_extra_http_headers({"User-Agent": ua})
-            try:
-                page.goto(target, timeout=60_000)
-                page.wait_for_url(lambda u: _on_host(u, host), timeout=30_000)
-            except PlaywrightTimeout:
-                raise ZeitError(f"Browser-Anmeldung abgelaufen (hängt bei {urlparse(page.url).hostname}). "
-                                f"Neu anmelden mit: zeit login {cfg['system'] or ''}".rstrip()) from None
-            return ctx.cookies([target]), ua
+            page.goto(target, timeout=60_000)
+            tried: list[str] = []
+            chosen, since, deadline = None, time.monotonic(), time.monotonic() + 90
+            while not _on_host(page.url, host):
+                now = time.monotonic()
+                if now > deadline:
+                    break
+                try:
+                    tiles = _account_tiles(page)
+                    if tiles:
+                        todo = [t for t in ([wanted] if wanted in tiles else []) + tiles if t not in tried]
+                        if not todo:
+                            break
+                        chosen = todo[0]
+                        tried.append(chosen)
+                        page.click(f'[data-test-id="{chosen}"]', timeout=5_000)
+                        since = now
+                    elif page.query_selector("#KmsiCheckboxField"):
+                        page.click("#idSIButton9", timeout=5_000)  # „Angemeldet bleiben?“ → Ja
+                    elif chosen and now - since > 15:
+                        # Falsches Konto (z. B. Gast in fremdem Tenant): Anmeldung neu starten, nächstes probieren.
+                        page.goto(target, timeout=60_000)
+                        since = now
+                except PlaywrightError:
+                    pass  # Seite lädt gerade neu
+                page.wait_for_timeout(500)
+            if not _on_host(page.url, host):
+                hint = f" Angemeldete Konten: {', '.join(tried)}." if tried else ""
+                raise LoginRequired(f"Browser-Anmeldung abgelaufen (hängt bei {urlparse(page.url).hostname}).{hint} "
+                                    f"Neu anmelden mit: zeit login {cfg['system'] or ''}".rstrip(), cfg["system"])
+            return ctx.cookies([target]), ua, chosen
         finally:
             ctx.close()
 
@@ -163,6 +250,7 @@ class Timesheet:
         self.s.headers["User-Agent"] = USER_AGENT
         self._csrf = None
         self._pernr = cfg.get("pernr")
+        self.s.hooks["response"].append(self._check_session)
         self._login()
 
     def _login(self) -> None:
@@ -171,7 +259,8 @@ class Timesheet:
         if self.cfg["auth"] != "kerberos":
             raise ZeitError(f"Unbekannte Anmeldemethode {self.cfg['auth']!r} (kerberos oder browser).")
         try:
-            r = self.s.get(self.cfg["portal_url"], auth=_negotiate_auth(urlparse(self.cfg["portal_url"]).hostname), timeout=30)
+            # Kurzer Connect-Timeout: außerhalb des Firmennetzes schnell auf die Browser-Anmeldung wechseln.
+            r = self.s.get(self.cfg["portal_url"], auth=_negotiate_auth(urlparse(self.cfg["portal_url"]).hostname), timeout=(5, 30))
         except requests.RequestException as e:
             raise ZeitError(f"Portal nicht erreichbar: {e}") from e
         if r.status_code == 401 or "MYSAPSSO2" not in self.s.cookies:
@@ -179,19 +268,41 @@ class Timesheet:
 
     def _browser_login(self) -> None:
         if not self.cfg.get("service_url") or self.cfg["service_url"] == DEFAULTS["service_url"]:
-            raise ZeitError(f"Service-URL für System {self.cfg['system']!r} unbekannt. Einrichten mit: "
-                            "zeit login NAME --url LAUNCHPAD-URL")
-        cookies, ua = _browser_session(self.cfg, f"{self.svc}/{self._client_qs()}")
+            raise LoginRequired(f"Service-URL für System {self.cfg['system']!r} unbekannt. Einrichten mit: "
+                                "zeit login NAME --url LAUNCHPAD-URL", self.cfg["system"])
+        cookies, ua, account = _browser_session(self.cfg, f"{self.svc}/{self._client_qs()}")
+        if account and account != (self.cfg.get("account") or "").lower():
+            # Funktionierendes Konto merken, damit beim nächsten Mal nicht erst probiert wird.
+            raw = read_config_file()
+            raw.setdefault("systems", {}).setdefault(self.cfg["system"], {})["account"] = account
+            save_config(raw)
         self.s.headers["User-Agent"] = ua
-        self.s.hooks["response"].append(self._check_redirect)
         for c in cookies:
             self.s.cookies.set(c["name"], c["value"], domain=c["domain"], path=c["path"], secure=c["secure"])
 
-    def _check_redirect(self, r: requests.Response, **_) -> None:
-        # Ohne gültige Session leitet der App-Router auf die Anmeldung um statt 401 zu liefern.
-        if urlparse(r.url).hostname != urlparse(self.svc).hostname:
-            raise ZeitError(f"Nicht angemeldet (Weiterleitung zu {urlparse(r.url).hostname}). "
-                            f"Neu anmelden mit: zeit login {self.cfg['system'] or ''}".rstrip())
+    def _check_session(self, r: requests.Response, **_) -> None:
+        """Abgelaufene Session erkennen. SAP antwortet dann oft nicht mit 401: Der BTP-App-Router leitet zur
+        Anmeldung um oder liefert mit HTTP 200 eine HTML-Anmeldeseite (fragmentAfterLogin), das Gateway
+        ebenso eine HTML-Logon-Seite. OData liefert sonst nie HTML."""
+        u = urlparse(r.url)
+        if self.cfg["auth"] == "browser" and u.hostname != urlparse(self.svc).hostname:
+            raise AuthError(f"Nicht angemeldet (Weiterleitung zu {u.hostname}).")
+        if "/sap/opu/odata/" in u.path and r.headers.get("content-type", "").startswith("text/html"):
+            raise AuthError(f"Session abgelaufen (Anmeldeseite statt Daten, HTTP {r.status_code}).")
+
+    def _request(self, method: str, url: str, write: bool = False, **kw) -> requests.Response:
+        """Verbindungsfehler (z. B. nach WLAN-Wechsel) gelten als verlorene Session (AuthError): Wer die Session
+        länger hält, kann dann neu verbinden. Bei Schreibzugriffen nur, wenn die Anfrage SAP nachweislich nicht
+        erreicht hat, sonst wäre ein zweiter Versuch eine Doppelbuchung."""
+        try:
+            return self.s.request(method, url, **kw)
+        except requests.RequestException as e:
+            unreached = isinstance(e, requests.ConnectTimeout) or any(
+                s in str(e) for s in ("NameResolutionError", "NewConnectionError", "Failed to resolve", "ConnectTimeoutError"))
+            if not write or unreached:
+                raise AuthError(f"Verbindung zu SAP unterbrochen: {e.__class__.__name__}") from e
+            raise ZeitError("Verbindung beim Speichern abgebrochen. Ob SAP gespeichert hat, ist unklar, "
+                            "bitte neu laden und prüfen.") from e
 
     def _client(self) -> dict:
         # Auf der BTP setzt oft die Destination den Mandanten, dann ist sap_client leer.
@@ -206,8 +317,10 @@ class Timesheet:
         return p
 
     def get(self, entity_set: str, flt: str | None = None) -> list[dict]:
-        r = self.s.get(f"{self.svc}/{entity_set}", params=self._params({"$filter": flt} if flt else None), timeout=60)
+        r = self._request("GET", f"{self.svc}/{entity_set}", params=self._params({"$filter": flt} if flt else None), timeout=60)
         data = r.json() if r.headers.get("content-type", "").startswith("application/json") else None
+        if r.status_code in (401, 403):
+            raise AuthError(f"{entity_set}: HTTP {r.status_code}, Session abgelaufen?")
         if r.status_code != 200 or data is None:
             raise ZeitError(f"{entity_set}: HTTP {r.status_code} {_sap_message(r.text)}")
         return data["d"]["results"]
@@ -266,12 +379,27 @@ class Timesheet:
 
     def _csrf_token(self) -> str:
         if not self._csrf:
-            r = self.s.get(self.svc + "/", params=self._client(),
-                           headers={"X-CSRF-Token": "Fetch"}, timeout=30)
+            r = self._request("GET", self.svc + "/", params=self._client(), headers={"X-CSRF-Token": "Fetch"}, timeout=30)
             self._csrf = r.headers.get("x-csrf-token")
+            if r.status_code in (401, 403):
+                raise AuthError(f"CSRF-Token: HTTP {r.status_code}")
             if not self._csrf:
                 raise ZeitError(f"Kein CSRF-Token erhalten (HTTP {r.status_code}).")
         return self._csrf
+
+    def _send(self, method: str, path: str, **kw) -> requests.Response:
+        """Schreibzugriff mit CSRF-Token. Ein abgelaufenes Token wird einmal neu geholt."""
+        headers = {"Accept": "application/json", **kw.pop("headers", {})}
+        for retry in (False, True):
+            r = self._request(method, f"{self.svc}/{path}", write=True, params=self._client(), timeout=120,
+                              headers={**headers, "X-CSRF-Token": self._csrf_token()}, **kw)
+            if r.status_code == 403 and r.headers.get("x-csrf-token", "").lower() == "required" and not retry:
+                self._csrf = None
+                continue
+            break
+        if r.status_code in (401, 403):
+            raise AuthError(f"{path}: HTTP {r.status_code} {_sap_message(r.text)}")
+        return r
 
     def submit(self, entries: list[dict]) -> list[dict]:
         """Sendet TimeEntries in einem $batch, je Buchung ein Changeset (Teilerfolg möglich)."""
@@ -292,9 +420,7 @@ class Timesheet:
             + f"--{changeset}{i}--\r\n".encode()
             for i, part in enumerate(parts)
         ) + f"--{batch}--\r\n".encode()
-        r = self.s.post(f"{self.svc}/$batch", params=self._client(), data=payload, timeout=120,
-                        headers={"Content-Type": f"multipart/mixed; boundary={batch}",
-                                 "X-CSRF-Token": self._csrf_token(), "Accept": "application/json"})
+        r = self._send("POST", "$batch", data=payload, headers={"Content-Type": f"multipart/mixed; boundary={batch}"})
         if r.status_code != 202:
             raise ZeitError(f"$batch: HTTP {r.status_code} {_sap_message(r.text)}")
         results, errors = [], []
@@ -309,6 +435,69 @@ class Timesheet:
             raise ZeitError(f"{len(entries) - len(results)} von {len(entries)} Operation(en) von SAP abgelehnt"
                             f" ({len(results)} erfolgreich):\n  " + "\n  ".join(errors or ["unerwartete Antwort"]))
         return results
+
+    # -- Favoriten der Fiori-App (Anlegen/Umbenennen/Löschen wie die Standard-App, ohne $batch)
+
+    def favorites(self) -> list[dict]:
+        return self.get("Favorites", f"Pernr eq '{self.pernr}'")
+
+    def _fav_path(self, fid: str) -> str:
+        return f"Favorites(ID='{fid.strip()}',Pernr='{self.pernr}')"
+
+    def create_favorite(self, name: str, fields: dict) -> dict:
+        r = self._send("POST", "Favorites", json={"Pernr": self.pernr, "Name": name, "FavoriteDataFields": fields})
+        if r.status_code != 201:
+            raise ZeitError(f"Favorit anlegen: HTTP {r.status_code} {_sap_message(r.text)}")
+        return r.json()["d"]
+
+    def rename_favorite(self, fid: str, name: str) -> None:
+        # PUT übernimmt nur den Namen, FavoriteDataFields ignoriert SAP dabei.
+        r = self._send("PUT", self._fav_path(fid), json={"ID": fid.strip(), "Pernr": self.pernr, "Name": name})
+        if r.status_code >= 400:
+            raise ZeitError(f"Favorit umbenennen: HTTP {r.status_code} {_sap_message(r.text)}")
+
+    def delete_favorite(self, fid: str) -> None:
+        r = self._send("DELETE", self._fav_path(fid))
+        if r.status_code >= 400:
+            raise ZeitError(f"Favorit löschen: HTTP {r.status_code} {_sap_message(r.text)}")
+
+    def time_statement(self, start: dt.date, end: dt.date) -> bytes:
+        """Monatlicher Zeitnachweis als PDF (Fiori „Meine Formulare“, wie die Browser-Erweiterung Clockmate)."""
+        base = self.svc.rsplit("/", 1)[0] + "/HCMFAB_MYFORMS_SRV"
+        params = f"BEGDA%3D{start:%Y%m%d}%40%3BENDDA%3D{end:%Y%m%d}"
+        r = self._request("GET", f"{base}/FormDisplaySet(EmployeeNumber='{self.pernr}',FormType='SAP_INT_TIM_STM',"
+                          f"ParametersValues='{params}')/$value", params=self._client(), timeout=120)
+        if r.status_code in (401, 403):
+            raise AuthError(f"Zeitnachweis: HTTP {r.status_code}")
+        if r.status_code != 200 or not r.content.startswith(b"%PDF"):
+            raise ZeitError(f"Zeitnachweis {start:%m/%Y}: HTTP {r.status_code} {_sap_message(r.text)}")
+        return r.content
+
+    def value_help(self, field: str) -> dict[str, str]:
+        return {r["FieldId"]: r["FieldValue"] for r in self.get("ValueHelpList", f"Pernr eq '{self.pernr}' and FieldName eq '{field}'")}
+
+
+FLEX_LABELS = {"end": ("Total Flextime Balance", "GLZ-Saldo aktuell"),
+               "previous": ("Flextime Balance for Preceding Period", "GLZ-Saldo Vorperiode")}
+
+
+def parse_time_statement(pdf: bytes) -> dict[str, float]:
+    """Liest die Gleitzeitsalden aus dem Zeitnachweis, z. B. „Total Flextime Balance    58.00“.
+    SAP schreibt negative Werte je nach Formular als „- 3.00“ oder „3.00-“."""
+    import io
+    from pypdf import PdfReader
+    text = "\n".join(p.extract_text() or "" for p in PdfReader(io.BytesIO(pdf)).pages)
+    out = {}
+    for key, labels in FLEX_LABELS.items():
+        for label in labels:
+            if m := re.search(re.escape(label) + r"\s*(-?)\s*(\d{1,3}(?:[.,]\d{3})*[.,]\d{2}|\d+)(-?)", text):
+                num = m.group(2)
+                num = num.replace(".", "").replace(",", ".") if "," in num[-3:] else num.replace(",", "")
+                out[key] = -float(num) if "-" in (m.group(1) + m.group(3)) else float(num)
+                break
+    if "end" not in out:
+        raise ZeitError("Gleitzeitsaldo im Zeitnachweis nicht gefunden.")
+    return out
 
 
 def _batch_parts(r: requests.Response) -> list[str]:
@@ -335,6 +524,13 @@ def time_entry(pernr: str, op: str, *, counter: str = "", release: bool = False,
                        "POSID": posid, "AWART": awart, "BEMOT": bemot, "LTXA1": text})
     return {"Pernr": pernr, "Counter": counter, "TimeEntryOperation": op,
             "TimeEntryRelease": "X" if release else " ", "TimeEntryDataFields": fields}
+
+
+def release_entry(pernr: str, e: dict) -> dict:
+    """Update einer gelesenen Buchung (TimeDataList) mit Freigabe."""
+    return time_entry(pernr, "U", counter=e["COUNTER"], release=True, day=dt.datetime.strptime(e["WORKDATE"], "%Y%m%d").date(),
+                      start=e["STARTTIME"], end=e["ENDTIME"], posid=e["POSID"],
+                      awart=e["AWART"], bemot=e["BEMOT"], text=e.get("LTXA1", ""))
 
 
 # ---------------------------------------------------------------- Parsing
@@ -525,11 +721,7 @@ def cmd_release(ts: Timesheet, cfg: dict, a) -> None:
     if not a.ja and input(f"{len(todo)} Buchung(en) freigeben? [j/N] ").strip().lower() not in ("j", "ja", "y"):
         print("Abgebrochen.")
         return
-    ts.submit([time_entry(ts.pernr, "U", counter=e["COUNTER"], release=True,
-                          day=dt.datetime.strptime(e["WORKDATE"], "%Y%m%d").date(),
-                          start=e["STARTTIME"], end=e["ENDTIME"], posid=e["POSID"],
-                          awart=e["AWART"], bemot=e["BEMOT"], text=e.get("LTXA1", ""))
-               for e in todo])
+    ts.submit([release_entry(ts.pernr, e) for e in todo])
     print(f"{len(todo)} Buchung(en) freigegeben.")
 
 
@@ -565,6 +757,8 @@ def cmd_login(cfg: dict, a) -> None:
     sysc = raw.setdefault("systems", {}).setdefault(name, {"auth": "browser"})
     if a.url:
         sysc["login_url"] = a.url
+    if a.konto:
+        sysc["account"] = a.konto.strip().lower()
     if sysc.get("auth") != "browser" or not sysc.get("login_url"):
         raise ZeitError(f"System {name!r} hat keine Browser-Anmeldung. Einrichten mit: zeit login {name} --url LAUNCHPAD-URL")
     lcfg = {**DEFAULTS, **raw, **sysc, "system": name}
@@ -611,6 +805,113 @@ def cmd_login(cfg: dict, a) -> None:
     ts = Timesheet(load_config(name))
     print(f"Angemeldet an {name!r}, Personalnummer {ts.pernr}."
           + ("" if raw.get("system") == name else f" Nutzen mit: zeit -s {name} show (oder zeit login {name} --standard)"))
+
+
+def cmd_favorites(ts: Timesheet, cfg: dict, a) -> None:
+    favs = [fav_out(f) for f in ts.favorites()]
+    if not favs:
+        print("Keine Favoriten. Anlegen in der Fiori-App „Meine Zeiterfassung“.")
+    for f in favs:
+        span = f"{f['start']}-{f['end']}" if f["start"] else "           "
+        print(f"{f['name']:<24} {span}  {f['posid']:<20} {BEMOT.get(f['bemot'], f['bemot']):<6}  „{f['text']}“")
+
+
+# ---------------------------------------------------------------- Favoriten und Gleitzeit
+
+def _hhmm(t: str | None) -> str:
+    return f"{t[:2]}:{t[2:4]}" if t and len(t) >= 4 and t.strip("0") else ""
+
+
+def fav_out(f: dict) -> dict:
+    d = f["FavoriteDataFields"]
+    return {"id": f["ID"].strip(), "name": f["Name"], "info": f.get("Field_Text", ""), "posid": d.get("POSID", ""),
+            "text": d.get("LTXA1", ""), "awart": d.get("AWART", ""), "bemot": d.get("BEMOT", ""),
+            "start": _hhmm(d.get("BEGUZ")), "end": _hhmm(d.get("ENDUZ")), "hours": float(d.get("CATSHOURS") or 0)}
+
+
+def _months(s: dt.date, e: dt.date):
+    while s <= e:
+        nxt = (s.replace(day=28) + dt.timedelta(days=4)).replace(day=1)
+        yield s, min(nxt - dt.timedelta(days=1), e)
+        s = nxt
+
+
+def day_sums(ts: Timesheet, s: dt.date, e: dt.date) -> list[dict]:
+    """Tagessummen für Gleitzeit und Faktura, wie sie die Zeitauswertung rechnet.
+    SAP erzeugt Abwesenheiten als Buchungen mit AWART 9xxx (z. B. „generiert - 9001 - Urlaub“, 8 h). Sie sind keine
+    Arbeitszeit, reduzieren aber das Soll (target = planned - Abwesenheit). Ein Gleittag (9003) reduziert es nicht,
+    er verbraucht also Gleitzeit. Saldo eines Tages: work - target."""
+    with ThreadPoolExecutor(4) as ex:
+        entries = ex.submit(ts.entries, s, e)
+        # WorkCalendars liefert bei Zeiträumen ab etwa 4 Monaten an Abwesenheitstagen schon reduziertes Soll,
+        # bei kürzeren das geplante. Monatsweise abfragen, damit es immer das geplante ist.
+        cals = [ex.submit(ts.calendar, a, b) for a, b in _months(s, e)]
+        cal = {k: v for f in cals for k, v in f.result().items()}
+        entries = entries.result()
+    days = {k: {"date": f"{k[:4]}-{k[4:6]}-{k[6:8]}", "planned": float(c.get("TargetHours") or 0),
+                "work": 0.0, "billable": 0.0, "flexoff": 0.0, "absence": 0.0} for k, c in cal.items()}
+    for x in entries:
+        d = days.get(x["WORKDATE"])
+        if d is None:
+            continue
+        h, awart = float(x.get("TIME") or 0), x.get("AWART", "")
+        if awart == "9003":
+            d["flexoff"] += h
+        elif awart.startswith("9"):
+            d["absence"] += h
+        else:
+            d["work"] += h
+            if x.get("BEMOT") == "01":
+                d["billable"] += h
+    for d in days.values():
+        d["target"] = max(d["planned"] - d["absence"], 0.0)
+    return [days[k] for k in sorted(days)]
+
+
+def flextime(ts: Timesheet, months_back: int = 6, cache: dict | None = None) -> dict:
+    """Gleitzeitkonto wie im SAP-Zeitnachweis. Der Nachweis zählt nur genehmigte Buchungen. Deshalb gilt der
+    Saldo des letzten Monats, dessen Buchungen alle genehmigt sind, danach die eigene Tagesrechnung bis gestern.
+    cache hält bereits gelesene Zeitnachweise (abgeschlossene Monate ändern sich nicht)."""
+    cache = {} if cache is None else cache
+    today = dt.date.today()
+    yesterday = today - dt.timedelta(days=1)
+    first = today.replace(day=1)
+    months = []
+    for _ in range(months_back):
+        first = (first - dt.timedelta(days=1)).replace(day=1)
+        months.append(first)
+    entries = ts.entries(months[-1], yesterday)
+    open_months = {e["WORKDATE"][:6] for e in entries if e.get("STATUS") != "DONE" and not e.get("AWART", "").startswith("9")}
+    errors = []
+    for m in months:
+        if f"{m:%Y%m}" in open_months:
+            continue
+        end = (m.replace(day=28) + dt.timedelta(days=4)).replace(day=1) - dt.timedelta(days=1)
+        key = f"{m:%Y%m}"
+        try:
+            if key not in cache:
+                cache[key] = parse_time_statement(ts.time_statement(m, end))
+        except ZeitError as e:
+            errors.append(str(e))
+            continue
+        st = cache[key]
+        days = day_sums(ts, end + dt.timedelta(days=1), yesterday) if end < yesterday else []
+        return {"statement_start": f"{m:%Y-%m-%d}", "statement_end": f"{end:%Y-%m-%d}", "balance": st["end"],
+                "previous": st.get("previous"), "days": days,
+                "open_months": sorted(f"{k[:4]}-{k[4:]}" for k in open_months)}
+    raise ZeitError("Kein Zeitnachweis mit vollständig genehmigten Buchungen in den letzten "
+                    f"{months_back} Monaten." + (f" ({errors[0]})" if errors else ""))
+
+
+def cmd_flex(ts: Timesheet, cfg: dict, a) -> None:
+    r = flextime(ts)
+    since = sum(d["work"] - d["target"] for d in r["days"])
+    fmt = lambda h: f"{h:+.2f} h".replace(".", ",")
+    print(f"Gleitzeit: {fmt(r['balance'] + since)} (Stand gestern)")
+    print(f"  Zeitnachweis bis {dt.date.fromisoformat(r['statement_end']):%d.%m.%Y}: {fmt(r['balance'])}")
+    print(f"  seitdem aus der Zeiterfassung: {fmt(since)}")
+    if r["open_months"]:
+        print(f"  noch nicht genehmigt: {', '.join(r['open_months'])}")
 
 
 # ---------------------------------------------------------------- CLI
@@ -682,7 +983,14 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("name", nargs="?", help="Systemname in der Config (Default: gewähltes System)")
     s.add_argument("--url", help="Launchpad-URL (nur beim ersten Mal nötig)")
     s.add_argument("--standard", action="store_true", help="System als Standard statt Kerberos setzen")
+    s.add_argument("--konto", help="Microsoft-Konto (E-Mail), falls im Browser mehrere angemeldet sind")
     s.set_defaults(func=cmd_login)
+
+    s = sub.add_parser("favoriten", aliases=["fav"], help="Favoriten der Fiori-App anzeigen")
+    s.set_defaults(func=cmd_favorites)
+
+    s = sub.add_parser("gleitzeit", aliases=["glz"], help="Gleitzeitkonto (Zeitnachweis + Buchungen seitdem)")
+    s.set_defaults(func=cmd_flex)
     return p
 
 
