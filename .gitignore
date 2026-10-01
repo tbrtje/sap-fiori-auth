@@ -5,3 +5,5 @@ build/
 **/.idea
 *.iml
 result
+dist/
+.DS_Store
