@@ -98,7 +98,9 @@ aus. Beim Löschen schickt es nur Datum und `0.00`.
 ### Browser-Anmeldung (`auth: "browser"`)
 
 Für Systeme mit M365-Login, zum Beispiel das Launchpad auf der SAP BTP, gibt es kein Kerberos.
-Stattdessen hat jedes System ein eigenes Browser-Profil unter `~/.local/share/sap-zeit/browser/<NAME>`.
+Stattdessen hat jedes System ein eigenes Browser-Profil unter `~/.local/share/sap-zeit/browser/<NAME>/<Browser>`.
+Genommen wird der Standardbrowser, falls er Chrome oder Edge ist, sonst Chrome, Edge, Chromium (fest: `"browser"`).
+Jeder Browser hat ein eigenes Profil, weil Chrome die verschlüsselten Cookies eines Edge-Profils nicht lesen kann.
 Dieses Profil ist vom normalen Browser des Users getrennt. `zeit` liest keine Cookies aus dem
 normalen Browser.
 
@@ -154,6 +156,8 @@ Der Kurztext wird vor dem Senden auf 40 Zeichen geprüft (`LTXA1_MAX`).
 | `freigeben [DATUM] [-t] [-y]` | `release` | TimeDataList | `U` + `X` | ja (außer `-y`) |
 | `alias [list\|add NAME PROJEKT [--bemot] [--awart]\|rm NAME]` | | WorkListCollection (nur `add`) | Config | – |
 | `login [NAME] [--url LAUNCHPAD-URL] [--standard]` | | ConcurrentEmploymentSet (Test) | Config, Browser-Profil | Browserfenster |
+| `favoriten` | `fav` | Favorites | – | – |
+| `gleitzeit` | `glz` | Zeitnachweis (PDF), TimeDataList, WorkCalendars | – | – |
 
 Globale Option vor dem Befehl: `-s NAME` bzw. `--system NAME` wählt das System, `-s kerberos` erzwingt Kerberos.
 
@@ -164,20 +168,33 @@ Hinweise:
 - **`edit`** schickt den ganzen Datensatz. Nicht angegebene Felder übernimmt die CLI aus der
   bestehenden Buchung. `--date` braucht man nur für Buchungen, die mehr als 8 Wochen zurückliegen.
 - **`freigeben`** nimmt alle Buchungen mit Status `MSAVE` aus der Woche (oder mit `-t` aus dem Tag)
-  und schickt sie mit `TimeEntryRelease = "X"` erneut. *Noch nicht an echten Buchungen getestet.*
+  und schickt sie mit `TimeEntryRelease = "X"` erneut. Danach stehen sie auf `MACTION` (freigegeben).
 - **`-f` bei `add`/`edit`** gibt direkt beim Speichern frei.
 - **`login`** richtet ein System mit Browser-Anmeldung ein oder erneuert die Anmeldung. Ohne `NAME`
   gilt das gewählte System. `--url` braucht man nur beim ersten Mal. Zum Schluss meldet sich `login`
   testweise an und zeigt die Personalnummer.
+- **`favoriten`** zeigt die Favoriten der Fiori-App. Anlegen, Umbenennen und Löschen bietet `Timesheet`
+  (`create_favorite`, `rename_favorite`, `delete_favorite`), die CLI selbst hat dafür keinen Befehl.
+- **`gleitzeit`** liest den Saldo aus dem letzten Zeitnachweis, in dem alle Buchungen genehmigt sind, und
+  rechnet ab dann bis gestern selbst (`flextime()`, Tagessummen über `day_sums()`, siehe API.md 4.9).
+
+### Abgelaufene Session
+
+SAP meldet eine abgelaufene Session oft nicht mit 401: Der BTP-App-Router liefert mit HTTP 200 eine
+HTML-Anmeldeseite (auch beim CSRF-Abruf), das Gateway eine Logon-Seite. `Timesheet` erkennt HTML-Antworten auf
+OData und wirft dann `AuthError`, ebenso bei Verbindungsfehlern (z. B. nach WLAN-Wechsel). Wer `zeit.py` als
+Bibliothek nutzt und eine Session länger offen hält, kann bei `AuthError` neu verbinden. Bei Schreibzugriffen
+kommt `AuthError` nur, wenn die Anfrage SAP nachweislich nicht erreicht hat, ein zweiter Versuch bucht also
+nicht doppelt. Sonst kommt `ZeitError` mit dem Hinweis, das Ergebnis zu prüfen.
 
 ## Bekannte Einschränkungen
 
 - Windows und Linux sind umgesetzt, aber nicht auf echten Rechnern getestet.
-- Die Freigabe ist ungetestet (siehe oben).
-- Die Bedeutung der Status-Codes `MACTION`, `YACTION` usw. ist nicht vollständig geklärt. Die
-  Anzeige „freigegeben“ für `MACTION` ist eine Annahme.
+- `zeit add -f` (direkt beim Anlegen freigeben) ist nicht an echten Buchungen getestet, `zeit freigeben` schon.
+- Die Tagesstatus in `WorkCalendars` (`YACTION` usw.) sind nicht vollständig geklärt. Bei Buchungen gilt:
+  `MSAVE` gespeichert, `MACTION` freigegeben, `DONE` genehmigt.
 - Die Leistungsart setzt das Backend fest auf `8990`. Die CLI kann sie nicht beeinflussen.
-- Langtexte, Favoriten und Buchungen ohne Uhrzeit (nur Stunden) werden nicht unterstützt.
+- Langtexte und Buchungen ohne Uhrzeit (nur Stunden) werden nicht unterstützt.
 - Mehrfach-Operationen sind nicht atomar (eine Operation pro Changeset).
 - Die Browser-Anmeldung braucht ein installiertes Edge oder Chrome (sonst Playwright-Chromium) und
   dauert pro Aufruf einige Sekunden. Verlangt Microsoft eine erneute MFA, schlägt der headless Aufruf

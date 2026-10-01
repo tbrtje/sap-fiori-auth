@@ -1,7 +1,7 @@
 ---
 name: zeit
 description: SAP-Zeiterfassung (CATS, Fiori „Meine Zeiterfassung“) über die CLI `zeit`. Verwenden, wenn der User Arbeitszeiten anzeigen, buchen, ändern, löschen oder freigeben will, nach Soll/Ist-Stunden, PSP-Elementen oder dem Arbeitsvorrat fragt oder erwähnt, was er heute/gestern gemacht hat und gebucht haben möchte.
-allowed-tools: Bash(zeit show:*), Bash(zeit w:*), Bash(zeit projekte:*), Bash(zeit p:*), Bash(zeit alias:*), Bash(zeit -s btp show:*), Bash(zeit -s btp w:*), Bash(zeit -s btp projekte:*), Bash(zeit -s btp p:*)
+allowed-tools: Bash(zeit show:*), Bash(zeit w:*), Bash(zeit projekte:*), Bash(zeit p:*), Bash(zeit alias:*), Bash(zeit fav:*), Bash(zeit gleitzeit:*), Bash(zeit glz:*), Bash(zeit favoriten:*), Bash(zeit -s btp show:*), Bash(zeit -s btp w:*), Bash(zeit -s btp projekte:*), Bash(zeit -s btp p:*)
 ---
 
 # SAP-Zeiterfassung mit `zeit`
@@ -20,6 +20,8 @@ zeit show gestern -t      # ein Tag
 zeit show 1.9. --bis 30.9.
 zeit projekte [SUCHE…]    # Arbeitsvorrat: buchbare PSP-Elemente
 zeit alias                # Kurznamen der Projekte
+zeit fav                  # Favoriten der Fiori-App (Name, Uhrzeit, PSP-Element, Text)
+zeit gleitzeit            # Gleitzeitkonto (Stand gestern)
 ```
 
 Die Spalten in `show` sind: Buchungsnummer, Von–Bis, Stunden, BEMOT (abr./n.abr./Reise),
@@ -47,9 +49,9 @@ Buchungen landen in der Abrechnung und bei der Führungskraft. Deshalb gilt:
    ob du buchen sollst (z. B. "passt das so?", "soll ich buchen?").
    Die Bestätigung holst du ausschließlich über das native Permission-Popup beim Tool-Aufruf
    ein – das reicht aus, eine zusätzliche Chat-Bestätigung entfällt immer.
-4. **Löschen** (`zeit rm`) und **Freigeben** (`zeit freigeben`, `-f`) nur auf ausdrücklichen Wunsch.
+5. **Löschen** (`zeit rm`) und **Freigeben** (`zeit freigeben`, `-f`) nur auf ausdrücklichen Wunsch.
    `-y` (ohne Rückfrage) nur verwenden, wenn der User genau diese Buchungen bestätigt hat.
-   Die Freigabe schickt die Zeiten zur Genehmigung und ist bisher nicht an echten Buchungen getestet.
+   Die Freigabe schickt die Zeiten zur Genehmigung und lässt sich nicht einfach rückgängig machen.
    Darauf weist du hin. Wenn du dir unsicher bist nutze auch hier eine Permission-Popup
    statt einer textuellen Bestätigung, z.B. "ja lösch das".
 
