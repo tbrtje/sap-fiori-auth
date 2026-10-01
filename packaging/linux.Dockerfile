@@ -15,7 +15,7 @@ RUN apt-get update \
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 ENV UV_PYTHON_INSTALL_DIR=/opt/uv-python
 RUN uv venv /venv --python "$PYTHON_VERSION" \
- && uv pip install --python /venv --no-cache pyinstaller requests truststore requests-gssapi playwright
+ && uv pip install --python /venv --no-cache pyinstaller requests truststore requests-gssapi playwright pypdf
 
 WORKDIR /src
 ENTRYPOINT ["/venv/bin/pyinstaller", "--noconfirm", "--clean", "--onefile", "--name", "zeit", \

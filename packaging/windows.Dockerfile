@@ -19,7 +19,7 @@ RUN curl -fsSL -o /tmp/python.zip "https://www.nuget.org/api/v2/package/python/$
  && rm -rf /tmp/python.zip /tmp/py
 
 RUN wine 'C:\Python\python.exe' -m pip install --no-cache-dir --disable-pip-version-check \
-      pyinstaller requests truststore requests-negotiate-sspi playwright \
+      pyinstaller requests truststore requests-negotiate-sspi playwright pypdf \
  && wineserver -w
 
 WORKDIR /src
