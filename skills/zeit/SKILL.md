@@ -42,7 +42,7 @@ Buchungen landen in der Abrechnung und bei der Führungskraft. Deshalb gilt:
    dann ohne weitere Rückfrage buchen.
 4. **Löschen** (`zeit rm`) und **Freigeben** (`zeit freigeben`, `-f`) nur auf ausdrücklichen Wunsch.
    `-y` (ohne Rückfrage) nur verwenden, wenn der User genau diese Buchungen bestätigt hat.
-   Die Freigabe schickt die Zeiten zur Genehmigung und ist bisher nicht an echten Buchungen getestet.
+   Die Freigabe schickt die Zeiten zur Genehmigung und lässt sich nicht einfach rückgängig machen.
    Darauf weist du hin.
 
 ```bash

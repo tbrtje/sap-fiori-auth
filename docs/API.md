@@ -308,8 +308,9 @@ Beim Ändern wird der ganze Datensatz geschickt, nicht nur die geänderten Felde
   immer `8990`.
 - Ungültige Werte werden pro Changeset abgelehnt, zum Beispiel
   „The attendance/absence type 01/9999 does not exist on 02.10.2026“.
-- **Ungetestet:** Freigeben (`U` mit `TimeEntryRelease: "X"`). Das entspricht dem Vorgehen der
-  Standard-App, wurde aber nicht an echten Buchungen geprüft.
+- **Freigeben** (`U` mit `TimeEntryRelease: "X"` und vollständigem Datensatz) funktioniert wie in der
+  Standard-App (getestet am 01.10.2026 mit einer echten Buchung). Danach hat die Buchung in `TimeDataList`
+  den Status `MACTION`. Direktes Freigeben beim Anlegen (`C` mit `"X"`, `zeit add -f`) ist nicht getestet.
 
 ### 4.7 Wertelisten
 
@@ -328,7 +329,8 @@ Beim Ändern wird der ganze Datensatz geschickt, nicht nur die geänderten Felde
 | Wert | Bedeutung |
 |---|---|
 | `MSAVE` | gespeichert, nicht freigegeben (gesichert) |
-| `MACTION` | vermutlich freigegeben (noch nicht abschließend geprüft) |
+| `MACTION` | freigegeben, wartet auf Genehmigung (bestätigt: `MSAVE` wird nach der Freigabe zu `MACTION`) |
+| `DONE` | genehmigt (abgeleitet: ältere Monate stehen durchgehend auf `DONE`, und genau diese Buchungen zählt der Zeitnachweis) |
 | `MAPPROVED`, `MREJECTED` | genehmigt / abgelehnt (angenommen, bisher nicht gesehen) |
 
 ### 4.8 Favoriten – `Favorites`

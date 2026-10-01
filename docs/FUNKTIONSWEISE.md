@@ -168,7 +168,7 @@ Hinweise:
 - **`edit`** schickt den ganzen Datensatz. Nicht angegebene Felder übernimmt die CLI aus der
   bestehenden Buchung. `--date` braucht man nur für Buchungen, die mehr als 8 Wochen zurückliegen.
 - **`freigeben`** nimmt alle Buchungen mit Status `MSAVE` aus der Woche (oder mit `-t` aus dem Tag)
-  und schickt sie mit `TimeEntryRelease = "X"` erneut. *Noch nicht an echten Buchungen getestet.*
+  und schickt sie mit `TimeEntryRelease = "X"` erneut. Danach stehen sie auf `MACTION` (freigegeben).
 - **`-f` bei `add`/`edit`** gibt direkt beim Speichern frei.
 - **`login`** richtet ein System mit Browser-Anmeldung ein oder erneuert die Anmeldung. Ohne `NAME`
   gilt das gewählte System. `--url` braucht man nur beim ersten Mal. Zum Schluss meldet sich `login`
@@ -190,9 +190,9 @@ nicht doppelt. Sonst kommt `ZeitError` mit dem Hinweis, das Ergebnis zu prüfen.
 ## Bekannte Einschränkungen
 
 - Windows und Linux sind umgesetzt, aber nicht auf echten Rechnern getestet.
-- Die Freigabe ist ungetestet (siehe oben).
-- Die Bedeutung der Status-Codes `MACTION`, `YACTION` usw. ist nicht vollständig geklärt. Die
-  Anzeige „freigegeben“ für `MACTION` ist eine Annahme.
+- `zeit add -f` (direkt beim Anlegen freigeben) ist nicht an echten Buchungen getestet, `zeit freigeben` schon.
+- Die Tagesstatus in `WorkCalendars` (`YACTION` usw.) sind nicht vollständig geklärt. Bei Buchungen gilt:
+  `MSAVE` gespeichert, `MACTION` freigegeben, `DONE` genehmigt.
 - Die Leistungsart setzt das Backend fest auf `8990`. Die CLI kann sie nicht beeinflussen.
 - Langtexte und Buchungen ohne Uhrzeit (nur Stunden) werden nicht unterstützt.
 - Mehrfach-Operationen sind nicht atomar (eine Operation pro Changeset).
